@@ -39,15 +39,15 @@ A collection of two Unity Editor tools designed for working with assets from *Pi
 - **Alpha textures** do not render properly
 - Some models (like islands) have **broken textures**
 - Inconsistent **FBX scale and rotation**
-- **Props with bones** are not supported
 
 > 🔧 Importing is functional but not yet perfect.
 
 ---
 
-## 🧠 Planned Features
+## 🧠 Planned Tools
 
 - 🔄 **World Data Exporter**
+- 🎦 **Third/First person player controller**
 
 ---
 
@@ -79,7 +79,11 @@ A collection of two Unity Editor tools designed for working with assets from *Pi
 
 ---
 
-## 🌍 World Data Importer – Screenshots
+## 🌍 World Data Importer – Screenshots/Videos
+
+### 🍺 Tortuga Tavern
+
+https://github.com/user-attachments/assets/c2c9f232-cbf9-42aa-8c1b-de6bef74e36a
 
 ### 🏠 Mansion Interior
 
@@ -103,3 +107,5 @@ A collection of two Unity Editor tools designed for working with assets from *Pi
 <img width="2761" height="1129" alt="Additional Import" src="https://github.com/user-attachments/assets/0fb7e76d-fa1f-48d0-bb10-f96840525b09" />
 
 ---
+
+
