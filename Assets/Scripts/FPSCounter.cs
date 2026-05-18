@@ -55,7 +55,7 @@ public class FPSCounter : MonoBehaviour
     static void AutoCreate()
     {
         // Auto-create FPS counter on play
-        if (FindObjectOfType<FPSCounter>() == null)
+        if (FindAnyObjectByType<FPSCounter>() == null)
         {
             GameObject fpsObj = new GameObject("FPS Counter");
             fpsObj.AddComponent<FPSCounter>();

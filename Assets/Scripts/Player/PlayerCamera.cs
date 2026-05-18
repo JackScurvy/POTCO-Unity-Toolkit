@@ -81,7 +81,7 @@ namespace Player
             if (target == null)
             {
                 Debug.LogWarning("⚠️ PlayerCamera: No target assigned. Searching for PlayerController...");
-                playerController = FindObjectOfType<PlayerController>();
+                playerController = FindAnyObjectByType<PlayerController>();
                 if (playerController != null)
                 {
                     target = playerController.transform;

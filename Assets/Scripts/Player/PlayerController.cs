@@ -114,7 +114,7 @@ namespace Player
         private void Start()
         {
             playerCamera = Camera.main?.GetComponent<PlayerCamera>();
-            oceanManager = FindObjectOfType<POTCO.Ocean.OceanManager>();
+            oceanManager = FindAnyObjectByType<POTCO.Ocean.OceanManager>();
             
             // Mask out Water layer (4) from ground mask to prevent walking on water
             groundMask &= ~(1 << 4);
@@ -150,10 +150,10 @@ namespace Player
             if (oceanManager == null)
             {
                 // Lazy load OceanManager if it wasn't found in Start (e.g. auto-spawned later)
-                // Check every 60 frames to avoid expensive FindObjectOfType every frame
+                // Check every 60 frames to avoid an expensive scene search every frame
                 if (Time.frameCount % 60 == 0)
                 {
-                    oceanManager = FindObjectOfType<POTCO.Ocean.OceanManager>();
+                    oceanManager = FindAnyObjectByType<POTCO.Ocean.OceanManager>();
                     if (oceanManager != null) Debug.Log("🌊 PlayerController found OceanManager!");
                 }
                 

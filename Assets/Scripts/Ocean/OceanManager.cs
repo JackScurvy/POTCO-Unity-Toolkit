@@ -93,7 +93,7 @@ namespace POTCO.Ocean
             // Find SkyboxManager if not assigned
             if (enableTimeBasedColor && skyboxManager == null)
             {
-                skyboxManager = FindObjectOfType<POTCO.Sky.SkyboxManager>();
+                skyboxManager = FindAnyObjectByType<POTCO.Sky.SkyboxManager>();
                 if (skyboxManager == null)
                 {
                     Debug.LogWarning("OceanManager: Time-based color enabled but no SkyboxManager found. Disabling time-based color.");

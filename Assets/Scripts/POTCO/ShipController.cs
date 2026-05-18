@@ -82,6 +82,7 @@ namespace POTCO
 
         // Cached wake material
         private static Material _cachedWakeMaterial;
+        private Collider[] shipColliderCache;
 
         void Start()
         {
@@ -126,6 +127,7 @@ namespace POTCO
 
             CreateCameraPoint();
             AddShipColliders(); // Replaces AddDeckColliders and AddShipHullCollider
+            CacheShipColliders();
 
             // Initialize bobbing
             basePosition = transform.position;
@@ -273,15 +275,21 @@ namespace POTCO
                 // but let's use MaterialPropertyBlock if we can. 
                 // However, emission keyword usually requires material modification.
                 // We will leave it as is but add a comment that it's a potential hotspot.
-                renderer.material.EnableKeyword("_EMISSION");
-                renderer.material.SetColor("_EmissionColor", new Color(1f, 0.6f, 0.3f) * 2f); 
+                Material projectileMaterial = renderer.material;
+                if (projectileMaterial != null)
+                {
+                    projectileMaterial.EnableKeyword("_EMISSION");
+                    projectileMaterial.SetColor("_EmissionColor", new Color(1f, 0.6f, 0.3f) * 2f);
+                }
             }
 
             // Ignore collisions with ALL colliders on this ship
-            Transform shipRoot = transform.root;
-            Collider[] shipColliders = shipRoot.GetComponentsInChildren<Collider>(true);
+            if (shipColliderCache == null || shipColliderCache.Length == 0)
+            {
+                CacheShipColliders();
+            }
 
-            foreach (Collider shipCollider in shipColliders)
+            foreach (Collider shipCollider in shipColliderCache)
             {
                 if (shipCollider != null && cannonballCollider != null)
                 {
@@ -404,7 +412,7 @@ namespace POTCO
             }
 
             // Search for CharacterController in scene
-            CharacterController[] controllers = FindObjectsOfType<CharacterController>();
+            CharacterController[] controllers = FindObjectsByType<CharacterController>(FindObjectsSortMode.None);
             if (controllers.Length > 0)
             {
                 Transform controller = controllers[0].transform;
@@ -999,6 +1007,11 @@ namespace POTCO
             }
 
             Debug.Log($"✅ Added {colliderCount} new mesh colliders - player can now walk on deck and hull");
+        }
+
+        private void CacheShipColliders()
+        {
+            shipColliderCache = transform.root.GetComponentsInChildren<Collider>(true);
         }
 
         /// <summary>

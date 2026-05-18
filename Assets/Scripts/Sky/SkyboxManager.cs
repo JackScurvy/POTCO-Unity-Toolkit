@@ -340,7 +340,7 @@ namespace POTCO.Sky
             // Find directional light if not assigned
             if (updateDirectionalLight && directionalLight == null)
             {
-                Light[] lights = FindObjectsOfType<Light>();
+                Light[] lights = FindObjectsByType<Light>(FindObjectsSortMode.None);
                 foreach (Light light in lights)
                 {
                     if (light.type == LightType.Directional)

@@ -80,6 +80,11 @@ public class EggImporter : ScriptedImporter
 
     public override void OnImportAsset(AssetImportContext ctx)
     {
+        if (!EggImportSession.IsExplicitImportActive)
+        {
+            return;
+        }
+
         // Cache settings instance to avoid repeated Resources.Load (optimization: 15-25% faster)
         var settings = EggImporterSettings.Instance;
 

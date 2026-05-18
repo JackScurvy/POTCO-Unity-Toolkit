@@ -1178,7 +1178,7 @@ namespace CharacterOG.Editor
         private void SetupPlayerCamera(GameObject playerObject)
         {
             // Find existing PlayerCamera
-            Player.PlayerCamera playerCamera = FindObjectOfType<Player.PlayerCamera>();
+            Player.PlayerCamera playerCamera = FindAnyObjectByType<Player.PlayerCamera>();
 
             if (playerCamera == null)
             {

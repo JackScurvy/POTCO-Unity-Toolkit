@@ -154,7 +154,7 @@ namespace Player
         private void PossessNearestNPC()
         {
             // Find all NPCs in range
-            POTCO.NPCController[] allNPCs = FindObjectsOfType<POTCO.NPCController>();
+            POTCO.NPCController[] allNPCs = FindObjectsByType<POTCO.NPCController>(FindObjectsSortMode.None);
             POTCO.NPCController nearestNPC = null;
             float nearestDistance = possessionRange;
 

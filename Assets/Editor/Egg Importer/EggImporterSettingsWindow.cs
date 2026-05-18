@@ -194,7 +194,7 @@ public class EggImporterSettingsWindow : EditorWindow
         
         if (autoImportEnabled)
         {
-            EditorGUILayout.HelpBox("✅ EGG files will be automatically processed when Unity starts or when files are added.", MessageType.Info);
+            EditorGUILayout.HelpBox("✅ EGG files can be processed when you approve the startup prompt or run a manual import action.", MessageType.Info);
         }
         else
         {
@@ -217,7 +217,7 @@ public class EggImporterSettingsWindow : EditorWindow
         }
         else
         {
-            EditorGUILayout.HelpBox("💬 Startup prompt is ENABLED. Will ask to import EGG files when opening the project (if auto-import is disabled).", MessageType.Info);
+            EditorGUILayout.HelpBox("💬 Startup prompt is ENABLED. Will ask to import EGG files when opening the project.", MessageType.Info);
         }
         
         EditorGUILayout.EndVertical();
@@ -479,7 +479,7 @@ public class EggImporterSettingsWindow : EditorWindow
 
         if (autoImportEnabled)
         {
-            EditorGUILayout.HelpBox("✅ Auto-import is currently ENABLED. EGG files should import automatically.", MessageType.Info);
+            EditorGUILayout.HelpBox("✅ Auto-import is currently ENABLED. EGG files can be processed by explicit startup or manual import actions.", MessageType.Info);
         }
         else
         {
@@ -1165,8 +1165,11 @@ public class EggImporterSettingsWindow : EditorWindow
 
         try
         {
-            // Force reimport the asset
-            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+            using (EggImportSession.BeginExplicitImport())
+            {
+                // Force reimport the asset
+                AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+            }
         }
         finally
         {

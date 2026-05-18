@@ -100,6 +100,10 @@ namespace POTCO
         private Vector3 cachedAvoidanceDir;
         private float cachedAvoidanceWeight;
 
+        private Collider[] shipColliderCache;
+        private static GameObject cachedCannonballPrefab;
+        private static Material cachedTrailMaterial;
+
         #endregion
 
         #region Enums
@@ -144,6 +148,7 @@ namespace POTCO
             }
 
             AddShipHullCollider();
+            CacheShipColliders();
 
             // Find player
             if (playerTransform == null)
@@ -882,6 +887,11 @@ namespace POTCO
             IgnorePlayerCollision(hullCollider);
         }
 
+        private void CacheShipColliders()
+        {
+            shipColliderCache = transform.root.GetComponentsInChildren<Collider>(true);
+        }
+
         private void IgnorePlayerCollision(Collider shipCollider)
         {
             if (shipCollider == null) return;
@@ -920,7 +930,7 @@ namespace POTCO
             if (isPlayerControlled) return;
 
             // Load cannonball prefab
-            GameObject cannonballPrefab = Resources.Load<GameObject>("phase_3/models/ammunition/cannonball");
+            GameObject cannonballPrefab = GetCannonballPrefab();
             if (cannonballPrefab == null)
             {
                 Debug.LogWarning($"[AIBroadside] Cannot spawn cannonball - prefab not loaded");
@@ -972,7 +982,11 @@ namespace POTCO
                 trail.time = 1.5f;
                 trail.startWidth = 0.8f;
                 trail.endWidth = 0.2f;
-                trail.material = new Material(Shader.Find("Sprites/Default"));
+                Material trailMaterial = GetTrailMaterial();
+                if (trailMaterial != null)
+                {
+                    trail.material = trailMaterial;
+                }
                 trail.startColor = new Color(0.5f, 0.7f, 1f, 1f); // Start more blue
                 trail.endColor = new Color(0.9f, 0.95f, 1f, 0f); // Fade to whiter transparent
                 trail.numCornerVertices = 5;
@@ -990,23 +1004,53 @@ namespace POTCO
 
             // Make material emissive if possible
             Renderer renderer = cannonball.GetComponent<Renderer>();
-            if (renderer != null && renderer.material != null)
+            if (renderer != null)
             {
-                renderer.material.EnableKeyword("_EMISSION");
-                renderer.material.SetColor("_EmissionColor", new Color(1f, 0.6f, 0.3f) * 2f); // Orange/yellow explosion emission
+                Material projectileMaterial = renderer.material;
+                if (projectileMaterial != null)
+                {
+                    projectileMaterial.EnableKeyword("_EMISSION");
+                    projectileMaterial.SetColor("_EmissionColor", new Color(1f, 0.6f, 0.3f) * 2f); // Orange/yellow explosion emission
+                }
             }
 
             // Ignore collisions with ALL colliders on this ship
-            Transform shipRoot = transform.root;
-            Collider[] shipColliders = shipRoot.GetComponentsInChildren<Collider>(true);
+            if (shipColliderCache == null || shipColliderCache.Length == 0)
+            {
+                CacheShipColliders();
+            }
 
-            foreach (Collider shipCollider in shipColliders)
+            foreach (Collider shipCollider in shipColliderCache)
             {
                 if (shipCollider != null && cannonballCollider != null)
                 {
                     Physics.IgnoreCollision(cannonballCollider, shipCollider);
                 }
             }
+        }
+
+        private static GameObject GetCannonballPrefab()
+        {
+            if (cachedCannonballPrefab == null)
+            {
+                cachedCannonballPrefab = Resources.Load<GameObject>("phase_3/models/ammunition/cannonball");
+            }
+
+            return cachedCannonballPrefab;
+        }
+
+        private static Material GetTrailMaterial()
+        {
+            if (cachedTrailMaterial == null)
+            {
+                Shader shader = Shader.Find("Sprites/Default");
+                if (shader != null)
+                {
+                    cachedTrailMaterial = new Material(shader);
+                }
+            }
+
+            return cachedTrailMaterial;
         }
 
         /// <summary>

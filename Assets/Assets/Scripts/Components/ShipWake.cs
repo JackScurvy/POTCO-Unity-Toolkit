@@ -1,5 +1,4 @@
 using UnityEngine;
-using System.Collections.Generic;
 
 namespace POTCO
 {
@@ -41,8 +40,8 @@ namespace POTCO
         
         // Averaging
         private const int avgCount = 50;
-        private readonly Queue<float> fwd = new Queue<float>();
-        private readonly Queue<float> yawVel = new Queue<float>();
+        private readonly MovingAverage fwd = new MovingAverage(avgCount);
+        private readonly MovingAverage yawVel = new MovingAverage(avgCount);
 
         // Offset management for no-bobbing
         private Vector3 sternOffset;
@@ -66,6 +65,7 @@ namespace POTCO
         private static readonly int WakeUProp = Shader.PropertyToID("_WakeU");
         private static readonly int ColorProp = Shader.PropertyToID("_Color");
         private static readonly int AlphaProp = Shader.PropertyToID("_Alpha");
+        private static readonly float[] WakeBoneBendFactors = { 0f, 0.5f, 0.4f, 1.0f };
 
         void Start()
         {
@@ -152,39 +152,20 @@ namespace POTCO
             lastYaw = yaw;
 
             // Moving averages
-            PushAvg(fwd, speed, avgCount);
-            PushAvg(yawVel, dYaw, avgCount);
+            fwd.Add(speed);
+            yawVel.Add(dYaw);
             
-            float v = AbsAvg(fwd);
+            float v = fwd.AbsoluteAverage;
             
             // Visibility & Alpha Logic
-            if (v < minWakeSpeed)
-            {
-                SetVisible(false);
-            }
-            else
-            {
-                SetVisible(true);
-                float alpha = (v < fadeOutSpeed) ? Mathf.InverseLerp(minWakeSpeed, fadeOutSpeed, v) : 1f;
-                SetAlpha(alpha);
-            }
+            bool isVisible = v >= minWakeSpeed;
+            SetVisible(isVisible);
+            float alpha = isVisible && v < fadeOutSpeed ? Mathf.InverseLerp(minWakeSpeed, fadeOutSpeed, v) : (isVisible ? 1f : 0f);
 
             // UV Scroll Logic (Backwards scroll based on speed)
             u = Mathf.Repeat(u - Time.deltaTime * v * wakeFactor, 1f);
-            
-            // Update all stern renderers
-            if (wakeRenderers != null)
-            {
-                foreach (var r in wakeRenderers)
-                {
-                    if (r)
-                    {
-                        r.GetPropertyBlock(propBlock);
-                        propBlock.SetFloat(WakeUProp, u);
-                        r.SetPropertyBlock(propBlock);
-                    }
-                }
-            }
+
+            ApplyWakeProperties(alpha);
         }
 
         void LateUpdate()
@@ -196,7 +177,7 @@ namespace POTCO
             Vector3 shipFlatPos = transform.position;
             Quaternion shipFlatRot = Quaternion.Euler(0, transform.eulerAngles.y, 0);
 
-            float targetR = Avg(yawVel);
+            float targetR = yawVel.Average;
             
             // Smoothing logic:
             // If target is moving away from 0 (turning), use turnTime.
@@ -227,14 +208,11 @@ namespace POTCO
                     // def_wake_3: Medium bend
                     // def_wake_4: Large bend
                     
-                    // Factors: 0, 0.5, 0.4, 1.0 ? (Decreased def_wake_3 to 0.4)
-                    float[] factors = { 0f, 0.5f, 0.4f, 1.0f };
-                    
                     for (int i = 0; i < wakeBones.Length; i++)
                     {
                         if (wakeBones[i])
                         {
-                            float factor = (i < factors.Length) ? factors[i] : 1.0f;
+                            float factor = (i < WakeBoneBendFactors.Length) ? WakeBoneBendFactors[i] : 1.0f;
                             
                             // We rotate around local Y (Yaw)
                             // Note: "TurnFactor" is negative for some reason in original code (-2f).
@@ -275,29 +253,20 @@ namespace POTCO
             }
         }
 
-        // Helper: Add value to queue and maintain capacity
-        static void PushAvg(Queue<float> q, float v, int cap)
+        void ApplyWakeProperties(float alpha)
         {
-            q.Enqueue(v);
-            while (q.Count > cap) q.Dequeue();
-        }
+            if (wakeRenderers == null) return;
+            if (propBlock == null) propBlock = new MaterialPropertyBlock();
 
-        // Helper: Average value
-        static float Avg(Queue<float> q)
-        {
-            if (q.Count == 0) return 0f;
-            float s = 0;
-            foreach (var x in q) s += x;
-            return s / q.Count;
-        }
+            foreach (var r in wakeRenderers)
+            {
+                if (!r) continue;
 
-        // Helper: Average of Absolute values
-        static float AbsAvg(Queue<float> q)
-        {
-            if (q.Count == 0) return 0f;
-            float s = 0;
-            foreach (var x in q) s += Mathf.Abs(x);
-            return s / q.Count;
+                r.GetPropertyBlock(propBlock);
+                propBlock.SetFloat(WakeUProp, u);
+                propBlock.SetFloat(AlphaProp, alpha);
+                r.SetPropertyBlock(propBlock);
+            }
         }
 
         void SetVisible(bool on)
@@ -311,26 +280,46 @@ namespace POTCO
             }
         }
 
-        void SetAlpha(float a)
-        {
-            if (wakeRenderers != null)
-            {
-                foreach (var r in wakeRenderers)
-                {
-                    if (r)
-                    {
-                        r.GetPropertyBlock(propBlock);
-                        propBlock.SetFloat(AlphaProp, a);
-                        r.SetPropertyBlock(propBlock);
-                    }
-                }
-            }
-        }
-        
         void OnValidate()
         {
             // Allow live updating of color in editor
             UpdateColor();
+        }
+
+        private sealed class MovingAverage
+        {
+            private readonly float[] samples;
+            private int nextIndex;
+            private int count;
+            private float sum;
+            private float absoluteSum;
+
+            public MovingAverage(int capacity)
+            {
+                samples = new float[capacity];
+            }
+
+            public float Average => count == 0 ? 0f : sum / count;
+            public float AbsoluteAverage => count == 0 ? 0f : absoluteSum / count;
+
+            public void Add(float value)
+            {
+                if (count == samples.Length)
+                {
+                    float previous = samples[nextIndex];
+                    sum -= previous;
+                    absoluteSum -= Mathf.Abs(previous);
+                }
+                else
+                {
+                    count++;
+                }
+
+                samples[nextIndex] = value;
+                sum += value;
+                absoluteSum += Mathf.Abs(value);
+                nextIndex = (nextIndex + 1) % samples.Length;
+            }
         }
     }
 }
