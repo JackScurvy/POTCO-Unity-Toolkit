@@ -95,6 +95,8 @@ namespace POTCO
         private const float AvoidanceEnterThreat = 0.22f;
         private const float AvoidanceExitThreat = 0.08f;
         private const float AvoidanceUrgentThreat = 0.45f;
+        private const float SharedPlayerSearchInterval = 1f;
+        private const float SharedPlayerColliderRefreshInterval = 2f;
         private static readonly float[] ProbeAngles = { -75f, -45f, -22f, 0f, 22f, 45f, 75f };
         private static readonly float[] CandidateAngles = { 0f, -18f, 18f, -38f, 38f, -62f, 62f, -88f, 88f, -115f, 115f };
 
@@ -128,9 +130,15 @@ namespace POTCO
         private Collider[] hullColliders;
         private Collider[] shipColliderCache;
         private readonly RaycastHit[] obstacleHitBuffer = new RaycastHit[MaxObstacleHits];
+        private readonly ShipAIObstacleThreat[] obstacleThreatBuffer = new ShipAIObstacleThreat[ProbeAngles.Length];
 
         private static GameObject cachedCannonballPrefab;
         private static Material cachedTrailMaterial;
+        private static GameObject cachedSharedPlayerObject;
+        private static Transform cachedSharedPlayerTarget;
+        private static Collider[] cachedSharedPlayerColliders;
+        private static float nextSharedPlayerSearchTime;
+        private static float nextSharedPlayerColliderSearchTime;
 
         #endregion
 
@@ -476,8 +484,6 @@ namespace POTCO
 
             if (Time.time >= nextAvoidanceScanTime)
             {
-                nextAvoidanceScanTime = Time.time + Mathf.Max(0.02f, obstacleRepathInterval);
-
                 ShipAIObstacleThreat[] threats = CollectObstacleThreats(out float highestThreat);
                 bool shouldAvoid = ShipAINavigation.ShouldMaintainAvoidance(
                     isAvoidingObstacle,
@@ -500,9 +506,17 @@ namespace POTCO
                 {
                     Vector3 avoidanceSide = NormalizeHorizontal(activeAvoidanceSideDirection, transform.right);
                     Vector3 blendedDirection = ShipAINavigation.BlendAvoidance(preferredDirection, avoidanceSide, threats);
-                    cachedAvoidanceDirection = FindBestClearDirection(blendedDirection, preferredDirection);
+                    cachedAvoidanceDirection = ShipAINavigation.ShouldRunClearanceCandidateSearch(highestThreat, AvoidanceUrgentThreat)
+                        ? FindBestClearDirection(blendedDirection, preferredDirection)
+                        : blendedDirection;
                     cachedAvoidanceWeight = highestThreat;
                 }
+
+                nextAvoidanceScanTime = Time.time + ShipAINavigation.GetAdaptiveAvoidanceScanInterval(
+                    obstacleRepathInterval,
+                    isAvoidingObstacle,
+                    cachedAvoidanceWeight,
+                    AvoidanceUrgentThreat);
             }
 
             return ShipAINavigation.BlendCachedAvoidance(preferredDirection, cachedAvoidanceDirection, cachedAvoidanceWeight);
@@ -530,7 +544,7 @@ namespace POTCO
             highestThreat = 0f;
             float range = GetAvoidanceRange();
             Vector3 bowDirection = GetBowDirection();
-            ShipAIObstacleThreat[] threats = new ShipAIObstacleThreat[ProbeAngles.Length];
+            ShipAIObstacleThreat[] threats = obstacleThreatBuffer;
 
             for (int i = 0; i < ProbeAngles.Length; i++)
             {
@@ -823,10 +837,22 @@ namespace POTCO
 
         private Transform FindPlayer()
         {
+            return GetSharedPlayerTarget();
+        }
+
+        private static GameObject GetSharedPlayerObject()
+        {
+            if (Time.time < nextSharedPlayerSearchTime)
+            {
+                return cachedSharedPlayerObject;
+            }
+
+            nextSharedPlayerSearchTime = Time.time + SharedPlayerSearchInterval;
+            GameObject previousPlayer = cachedSharedPlayerObject;
             GameObject player = GameObject.FindGameObjectWithTag("Player");
             if (player == null)
             {
-                Player.PlayerController pc = FindAnyObjectByType<Player.PlayerController>();
+                Player.PlayerController pc = UnityEngine.Object.FindAnyObjectByType<Player.PlayerController>();
                 if (pc != null)
                 {
                     if (pc.tag == "Untagged")
@@ -838,6 +864,29 @@ namespace POTCO
                 }
             }
 
+            cachedSharedPlayerObject = player;
+            cachedSharedPlayerTarget = ResolvePlayerTarget(player);
+            if (cachedSharedPlayerObject != previousPlayer)
+            {
+                cachedSharedPlayerColliders = null;
+            }
+
+            return cachedSharedPlayerObject;
+        }
+
+        private static Transform GetSharedPlayerTarget()
+        {
+            if (Time.time < nextSharedPlayerSearchTime && cachedSharedPlayerTarget != null)
+            {
+                return cachedSharedPlayerTarget;
+            }
+
+            GetSharedPlayerObject();
+            return cachedSharedPlayerTarget;
+        }
+
+        private static Transform ResolvePlayerTarget(GameObject player)
+        {
             if (player == null)
             {
                 return null;
@@ -853,6 +902,21 @@ namespace POTCO
             }
 
             return player.transform;
+        }
+
+        private static Collider[] GetSharedPlayerColliders()
+        {
+            if (Time.time < nextSharedPlayerColliderSearchTime && cachedSharedPlayerColliders != null)
+            {
+                return cachedSharedPlayerColliders;
+            }
+
+            nextSharedPlayerColliderSearchTime = Time.time + SharedPlayerColliderRefreshInterval;
+            GameObject player = GetSharedPlayerObject();
+            cachedSharedPlayerColliders = player != null
+                ? player.GetComponentsInChildren<Collider>()
+                : null;
+            return cachedSharedPlayerColliders;
         }
 
         #endregion
@@ -898,22 +962,12 @@ namespace POTCO
                 return;
             }
 
-            GameObject player = GameObject.FindGameObjectWithTag("Player");
-            if (player == null)
-            {
-                Player.PlayerController pc = FindAnyObjectByType<Player.PlayerController>();
-                if (pc != null)
-                {
-                    player = pc.gameObject;
-                }
-            }
-
-            if (player == null)
+            Collider[] playerColliders = GetSharedPlayerColliders();
+            if (playerColliders == null || playerColliders.Length == 0)
             {
                 return;
             }
 
-            Collider[] playerColliders = player.GetComponentsInChildren<Collider>();
             foreach (Collider shipCollider in shipColliders)
             {
                 foreach (Collider playerCollider in playerColliders)

@@ -177,6 +177,33 @@ namespace POTCO
             return currentlyAvoiding;
         }
 
+        public static float GetAdaptiveAvoidanceScanInterval(
+            float baseInterval,
+            bool currentlyAvoiding,
+            float threatWeight,
+            float urgentThreshold)
+        {
+            float interval = Mathf.Max(0.02f, baseInterval);
+            float threat = Mathf.Clamp01(threatWeight);
+            float urgent = Mathf.Clamp01(urgentThreshold);
+            if (threat >= urgent)
+            {
+                return interval;
+            }
+
+            if (currentlyAvoiding)
+            {
+                return interval * 1.5f;
+            }
+
+            return Mathf.Max(interval, 0.35f);
+        }
+
+        public static bool ShouldRunClearanceCandidateSearch(float threatWeight, float urgentThreshold)
+        {
+            return Mathf.Clamp01(threatWeight) >= Mathf.Clamp01(urgentThreshold);
+        }
+
         public static Vector3 BlendCachedAvoidance(
             Vector3 preferredDirection,
             Vector3 cachedAvoidanceDirection,
