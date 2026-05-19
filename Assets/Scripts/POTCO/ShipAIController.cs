@@ -91,7 +91,8 @@ namespace POTCO
         private Vector3 avoidanceDirection = Vector3.zero;
         private float avoidanceWeight = 0f;
         private float obstacleDetectionRange = 30f;
-        private BoxCollider hullCollider;
+        private Collider[] hullColliders;
+        private ShipCollisionResolver collisionResolver;
 
         // Collision check timer (optimization)
         private float collisionCheckTimer = 0f;
@@ -141,13 +142,14 @@ namespace POTCO
             if (rb != null)
             {
                 rb.useGravity = false;
-                rb.isKinematic = false; // Use dynamic rigidbody for physics interactions
+                rb.isKinematic = true; // Controller-driven movement; prevents projectile/ship impulse shove.
+                rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
                 rb.linearDamping = 1f;
                 rb.angularDamping = 2f;
                 rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ | RigidbodyConstraints.FreezePositionY;
             }
 
-            AddShipHullCollider();
+            BuildShipCollision();
             CacheShipColliders();
 
             // Find player
@@ -185,7 +187,7 @@ namespace POTCO
             {
                 collisionCheckTimer = 0f;
 
-                if (hullCollider != null)
+                if (hullColliders != null && hullColliders.Length > 0)
                 {
                     GameObject player = GameObject.FindGameObjectWithTag("Player");
                     if (player == null)
@@ -197,11 +199,14 @@ namespace POTCO
                     if (player != null)
                     {
                         Collider[] playerColliders = player.GetComponentsInChildren<Collider>();
-                        foreach (Collider playerCollider in playerColliders)
+                        foreach (Collider shipCollider in hullColliders)
                         {
-                            if (playerCollider != null && hullCollider != null)
+                            foreach (Collider playerCollider in playerColliders)
                             {
-                                Physics.IgnoreCollision(hullCollider, playerCollider, true);
+                                if (shipCollider != null && playerCollider != null)
+                                {
+                                    Physics.IgnoreCollision(shipCollider, playerCollider, true);
+                                }
                             }
                         }
                     }
@@ -724,7 +729,7 @@ namespace POTCO
                 Vector3 direction = Quaternion.Euler(0, angle, 0) * -transform.forward;
 
                 RaycastHit hit;
-                if (Physics.Raycast(transform.position + Vector3.up * 5f, direction, out hit, obstacleDetectionRange))
+                if (Physics.Raycast(transform.position + Vector3.up * 5f, direction, out hit, obstacleDetectionRange, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
                 {
                     // Ignore cannonballs - don't avoid projectiles
                     if (hit.collider.GetComponent<CannonProjectile>() != null)
@@ -854,42 +859,23 @@ namespace POTCO
             return player.transform;
         }
 
-        private void AddShipHullCollider()
+        private void BuildShipCollision()
         {
-            hullCollider = GetComponent<BoxCollider>();
-            if (hullCollider != null)
+            ShipHullColliderBuilder.BuildForShip(gameObject);
+            hullColliders = ShipHullColliderBuilder.GetShipColliders(gameObject, true);
+            IgnorePlayerCollision(hullColliders);
+
+            collisionResolver = GetComponent<ShipCollisionResolver>();
+            if (collisionResolver == null)
             {
-                IgnorePlayerCollision(hullCollider);
-                return;
+                collisionResolver = gameObject.AddComponent<ShipCollisionResolver>();
             }
-
-            Renderer[] renderers = GetComponentsInChildren<Renderer>();
-            if (renderers.Length == 0) return;
-
-            Bounds combinedBounds = renderers[0].bounds;
-            foreach (Renderer renderer in renderers)
-            {
-                if (renderer.name.ToLower().Contains("mast") ||
-                    renderer.name.ToLower().Contains("sail"))
-                    continue;
-
-                combinedBounds.Encapsulate(renderer.bounds);
-            }
-
-            hullCollider = gameObject.AddComponent<BoxCollider>();
-            hullCollider.center = transform.InverseTransformPoint(combinedBounds.center);
-            hullCollider.size = new Vector3(
-                combinedBounds.size.x / transform.lossyScale.x,
-                combinedBounds.size.y / transform.lossyScale.y,
-                combinedBounds.size.z / transform.lossyScale.z
-            );
-
-            IgnorePlayerCollision(hullCollider);
+            collisionResolver.RefreshContactColliders();
         }
 
         private void CacheShipColliders()
         {
-            shipColliderCache = transform.root.GetComponentsInChildren<Collider>(true);
+            shipColliderCache = ShipHullColliderBuilder.GetShipColliders(gameObject, true);
         }
 
         private void IgnorePlayerCollision(Collider shipCollider)
@@ -973,6 +959,8 @@ namespace POTCO
             {
                 projectile = cannonball.AddComponent<CannonProjectile>();
             }
+            projectile.SetOwnerRoot(transform.root);
+            projectile.SetInitialVelocity(launchVelocity, true);
 
             // Add bright trail renderer for visibility
             TrailRenderer trail = cannonball.GetComponent<TrailRenderer>();
@@ -1027,6 +1015,47 @@ namespace POTCO
                     Physics.IgnoreCollision(cannonballCollider, shipCollider);
                 }
             }
+        }
+
+        private void IgnorePlayerCollision(Collider[] shipColliders)
+        {
+            if (shipColliders == null || shipColliders.Length == 0) return;
+
+            GameObject player = GameObject.FindGameObjectWithTag("Player");
+            if (player == null)
+            {
+                Player.PlayerController pc = FindAnyObjectByType<Player.PlayerController>();
+                if (pc != null) player = pc.gameObject;
+            }
+
+            if (player == null) return;
+
+            Collider[] playerColliders = player.GetComponentsInChildren<Collider>();
+            foreach (Collider shipCollider in shipColliders)
+            {
+                foreach (Collider playerCollider in playerColliders)
+                {
+                    if (shipCollider != null && playerCollider != null)
+                    {
+                        Physics.IgnoreCollision(shipCollider, playerCollider, true);
+                    }
+                }
+            }
+        }
+
+        public void ApplyShipCollisionCorrection(Vector3 correction, float speedRetention)
+        {
+            correction.y = 0f;
+            if (rb != null)
+            {
+                rb.MovePosition(rb.position + correction);
+            }
+            else
+            {
+                transform.position += correction;
+            }
+
+            currentSpeed *= Mathf.Clamp01(speedRetention);
         }
 
         private static GameObject GetCannonballPrefab()

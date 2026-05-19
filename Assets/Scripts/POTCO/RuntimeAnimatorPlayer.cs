@@ -14,12 +14,14 @@ namespace POTCO
     {
         private Animator animator;
         private PlayableGraph playableGraph;
-        private AnimationMixerPlayable mixer;
+        private AnimationLayerMixerPlayable mixer;
 
         // Track all clips and their playable indices
         private Dictionary<string, AnimationClipPlayable> clipPlayables = new Dictionary<string, AnimationClipPlayable>();
         private Dictionary<string, int> clipIndices = new Dictionary<string, int>();
         private Dictionary<string, WrapMode> clipWrapModes = new Dictionary<string, WrapMode>();
+        private readonly List<Transform> excludedTransforms = new List<Transform>();
+        private AvatarMask transformMask;
 
         // Track current animation and crossfade state
         private string currentClipName = "";
@@ -53,7 +55,7 @@ namespace POTCO
             playableGraph.SetTimeUpdateMode(DirectorUpdateMode.GameTime);
 
             // Create mixer with initial capacity (will grow as clips are added)
-            mixer = AnimationMixerPlayable.Create(playableGraph, 0);
+            mixer = AnimationLayerMixerPlayable.Create(playableGraph, 0);
 
             // Connect mixer to Animator
             var output = AnimationPlayableOutput.Create(playableGraph, "Animation", animator);
@@ -65,6 +67,26 @@ namespace POTCO
             isInitialized = true;
 
             DebugLogger.LogRuntimeAnimator($"✅ RuntimeAnimatorPlayer initialized on {gameObject.name}");
+        }
+
+        public void ExcludeTransformsFromAnimation(IList<Transform> transformsToExclude)
+        {
+            if (transformsToExclude == null || transformsToExclude.Count == 0)
+            {
+                return;
+            }
+
+            foreach (Transform transformToExclude in transformsToExclude)
+            {
+                if (transformToExclude == null || excludedTransforms.Contains(transformToExclude))
+                {
+                    continue;
+                }
+
+                excludedTransforms.Add(transformToExclude);
+            }
+
+            RebuildTransformMask();
         }
 
         /// <summary>
@@ -96,6 +118,7 @@ namespace POTCO
             // Add to mixer
             int inputIndex = mixer.GetInputCount();
             mixer.AddInput(clipPlayable, 0, 0f); // Initial weight 0
+            ApplyTransformMaskToInput(inputIndex);
 
             // Store references
             clipPlayables[name] = clipPlayable;
@@ -446,6 +469,89 @@ namespace POTCO
                 return null;
 
             return clipPlayables[clipName].GetAnimationClip();
+        }
+
+        private void RebuildTransformMask()
+        {
+            transformMask = null;
+            if (excludedTransforms.Count == 0)
+            {
+                return;
+            }
+
+            AvatarMask mask = new AvatarMask();
+            mask.AddTransformPath(transform, true);
+
+            for (int i = 0; i < mask.transformCount; i++)
+            {
+                string maskPath = mask.GetTransformPath(i);
+                mask.SetTransformActive(i, !IsExcludedMaskPath(maskPath));
+            }
+
+            transformMask = mask;
+            ApplyTransformMaskToExistingInputs();
+        }
+
+        private bool IsExcludedMaskPath(string maskPath)
+        {
+            foreach (Transform excludedTransform in excludedTransforms)
+            {
+                if (excludedTransform == null)
+                {
+                    continue;
+                }
+
+                string excludedPath = GetRelativePath(transform, excludedTransform);
+                if (!string.IsNullOrEmpty(excludedPath) &&
+                    (maskPath == excludedPath || maskPath.EndsWith("/" + excludedPath)))
+                {
+                    return true;
+                }
+
+                if (maskPath == excludedTransform.name || maskPath.EndsWith("/" + excludedTransform.name))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void ApplyTransformMaskToExistingInputs()
+        {
+            for (int i = 0; i < mixer.GetInputCount(); i++)
+            {
+                ApplyTransformMaskToInput(i);
+            }
+        }
+
+        private void ApplyTransformMaskToInput(int inputIndex)
+        {
+            if (transformMask == null || !mixer.IsValid())
+            {
+                return;
+            }
+
+            mixer.SetLayerMaskFromAvatarMask((uint)inputIndex, transformMask);
+        }
+
+        private static string GetRelativePath(Transform root, Transform target)
+        {
+            if (root == null || target == null || target == root)
+            {
+                return string.Empty;
+            }
+
+            List<string> pathParts = new List<string>();
+            Transform current = target;
+            while (current != null && current != root)
+            {
+                pathParts.Add(current.name);
+                current = current.parent;
+            }
+
+            pathParts.Reverse();
+            return string.Join("/", pathParts);
         }
 
         /// <summary>

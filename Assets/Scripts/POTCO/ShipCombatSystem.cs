@@ -49,6 +49,10 @@ namespace POTCO
         [Tooltip("Maximum angle deviation before stopping volley (degrees)")]
         public float maxAngleDeviation = 45f;
 
+        [Header("Rigging Optimization")]
+        [Tooltip("Only pin rope ladder rigging while mast transition animations are changing it")]
+        public bool pinRopeLaddersDuringMastTransitions = true;
+
         [Header("Read-Only Status")]
         [SerializeField] private bool sailsDown = false;
         [SerializeField] private bool isFiring = false;
@@ -91,9 +95,11 @@ namespace POTCO
         private AnimationClip cannonCloseClip;
 
         // State tracking
-        private bool isRollingDown = false;
         private float lastFireTime = -999f;
         private bool currentFiringSide = false; // true = left, false = right
+        private Coroutine sailTransitionCoroutine;
+        private Coroutine ropeLadderPinCoroutine;
+        private Coroutine ropeLadderApplyCoroutine;
 
         #endregion
 
@@ -110,17 +116,79 @@ namespace POTCO
             Debug.Log($"[ShipCombatSystem] {gameObject.name} initialized - {mastAnimations.Count} masts, {leftBroadsideCannons.Count} left cannons, {rightBroadsideCannons.Count} right cannons");
         }
 
-        private void LateUpdate()
+        #endregion
+
+        #region Rigging Pinning
+
+        private void ApplyRopeLadderTransforms()
         {
-            // Force rope ladder positions after animations have updated
             foreach (var ladderData in ropeLadders)
             {
-                if (ladderData.ladderTransform != null)
+                if (ladderData.ladderTransform == null)
                 {
-                    ladderData.ladderTransform.localPosition = ladderData.targetLocalPosition;
-                    ladderData.ladderTransform.localRotation = ladderData.targetLocalRotation;
+                    continue;
                 }
+
+                ladderData.ladderTransform.localPosition = ladderData.targetLocalPosition;
+                ladderData.ladderTransform.localRotation = ladderData.targetLocalRotation;
             }
+        }
+
+        private void ScheduleRopeLadderApply()
+        {
+            if (ropeLadders.Count == 0)
+            {
+                return;
+            }
+
+            if (ropeLadderApplyCoroutine != null)
+            {
+                StopCoroutine(ropeLadderApplyCoroutine);
+            }
+
+            ropeLadderApplyCoroutine = StartCoroutine(ApplyRopeLadderTransformsForFrames(2));
+        }
+
+        private IEnumerator ApplyRopeLadderTransformsForFrames(int frameCount)
+        {
+            ApplyRopeLadderTransforms();
+
+            for (int i = 0; i < frameCount; i++)
+            {
+                yield return new WaitForEndOfFrame();
+                ApplyRopeLadderTransforms();
+            }
+
+            ropeLadderApplyCoroutine = null;
+        }
+
+        private void PinRopeLaddersFor(float duration)
+        {
+            if (!pinRopeLaddersDuringMastTransitions || ropeLadders.Count == 0)
+            {
+                ScheduleRopeLadderApply();
+                return;
+            }
+
+            if (ropeLadderPinCoroutine != null)
+            {
+                StopCoroutine(ropeLadderPinCoroutine);
+            }
+
+            ropeLadderPinCoroutine = StartCoroutine(PinRopeLaddersForDuration(duration));
+        }
+
+        private IEnumerator PinRopeLaddersForDuration(float duration)
+        {
+            float endTime = Time.time + Mathf.Max(0.05f, duration);
+            while (Time.time < endTime)
+            {
+                yield return new WaitForEndOfFrame();
+                ApplyRopeLadderTransforms();
+            }
+
+            ApplyRopeLadderTransforms();
+            ropeLadderPinCoroutine = null;
         }
 
         #endregion
@@ -182,6 +250,7 @@ namespace POTCO
                         // Find and store rope ladder positions
                         Transform leftLadder = FindChildRecursive(actualMast, "def_ladder_0_left");
                         Transform rightLadder = FindChildRecursive(actualMast, "def_ladder_0_right");
+                        List<Transform> riggingAnimationExclusions = new List<Transform>(2);
 
                         if (leftLadder != null)
                         {
@@ -191,6 +260,7 @@ namespace POTCO
                                 targetLocalPosition = leftLadder.localPosition,
                                 targetLocalRotation = leftLadder.localRotation
                             });
+                            riggingAnimationExclusions.Add(leftLadder);
                             Debug.Log($"Stored left rope ladder position for {actualMast.name}");
                         }
 
@@ -202,8 +272,11 @@ namespace POTCO
                                 targetLocalPosition = rightLadder.localPosition,
                                 targetLocalRotation = rightLadder.localRotation
                             });
+                            riggingAnimationExclusions.Add(rightLadder);
                             Debug.Log($"Stored right rope ladder position for {actualMast.name}");
                         }
+
+                        anim.ExcludeTransformsFromAnimation(riggingAnimationExclusions);
                     }
                     else
                     {
@@ -444,9 +517,13 @@ namespace POTCO
             if (!sailsDown)
             {
                 sailsDown = true;
-                isRollingDown = true;
                 PlayMastAnimation("rolldown", WrapMode.Once);
-                StartCoroutine(SwitchToIdleAfterRollDown());
+                PinRopeLaddersFor(GetMaxMastAnimationLength("rolldown") + 0.1f);
+                if (sailTransitionCoroutine != null)
+                {
+                    StopCoroutine(sailTransitionCoroutine);
+                }
+                sailTransitionCoroutine = StartCoroutine(SwitchToIdleAfterRollDown());
                 Debug.Log("Rolling down sails - ship will start moving forward");
             }
         }
@@ -459,10 +536,14 @@ namespace POTCO
             if (sailsDown)
             {
                 sailsDown = false;
-                isRollingDown = false;
-                StopAllCoroutines(); // Stop the idle switch coroutine
+                if (sailTransitionCoroutine != null)
+                {
+                    StopCoroutine(sailTransitionCoroutine);
+                    sailTransitionCoroutine = null;
+                }
                 PlayMastAnimation("rollup", WrapMode.Once);
-                StartCoroutine(SwitchToTiedUpAfterRollUp());
+                PinRopeLaddersFor(GetMaxMastAnimationLength("rollup") + 0.1f);
+                sailTransitionCoroutine = StartCoroutine(SwitchToTiedUpAfterRollUp());
                 Debug.Log("Rolling up sails - ship will stop");
             }
         }
@@ -536,19 +617,13 @@ namespace POTCO
             }
 
             Debug.Log($"[MAST ANIM] Completed: played on {played}/{mastAnimations.Count} masts");
+            ScheduleRopeLadderApply();
         }
 
         private IEnumerator SwitchToIdleAfterRollDown()
         {
             // Wait for rolldown animation to finish - use the longest animation length
-            float maxLength = 0f;
-            foreach (MastAnimationData mastData in mastAnimations)
-            {
-                if (mastData.rollDownClip != null && mastData.rollDownClip.length > maxLength)
-                {
-                    maxLength = mastData.rollDownClip.length;
-                }
-            }
+            float maxLength = GetMaxMastAnimationLength("rolldown");
 
             if (maxLength > 0f)
             {
@@ -560,22 +635,15 @@ namespace POTCO
             }
 
             // Switch to idle loop
-            isRollingDown = false;
             PlayMastAnimation("idle", WrapMode.Loop);
+            sailTransitionCoroutine = null;
             Debug.Log("Sails now in idle state");
         }
 
         private IEnumerator SwitchToTiedUpAfterRollUp()
         {
             // Wait for rollup animation to finish - use the longest animation length
-            float maxLength = 0f;
-            foreach (MastAnimationData mastData in mastAnimations)
-            {
-                if (mastData.rollUpClip != null && mastData.rollUpClip.length > maxLength)
-                {
-                    maxLength = mastData.rollUpClip.length;
-                }
-            }
+            float maxLength = GetMaxMastAnimationLength("rollup");
 
             if (maxLength > 0f)
             {
@@ -588,7 +656,39 @@ namespace POTCO
 
             // Switch to tied up loop
             PlayMastAnimation("tiedup", WrapMode.Loop);
+            sailTransitionCoroutine = null;
             Debug.Log("Sails now tied up");
+        }
+
+        private float GetMaxMastAnimationLength(string animType)
+        {
+            float maxLength = 0f;
+            foreach (MastAnimationData mastData in mastAnimations)
+            {
+                AnimationClip clip = null;
+                switch (animType.ToLower())
+                {
+                    case "tiedup":
+                        clip = mastData.tiedUpClip;
+                        break;
+                    case "rollup":
+                        clip = mastData.rollUpClip;
+                        break;
+                    case "rolldown":
+                        clip = mastData.rollDownClip;
+                        break;
+                    case "idle":
+                        clip = mastData.idleClip;
+                        break;
+                }
+
+                if (clip != null && clip.length > maxLength)
+                {
+                    maxLength = clip.length;
+                }
+            }
+
+            return maxLength;
         }
 
         #endregion

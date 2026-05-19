@@ -83,6 +83,7 @@ namespace POTCO
         // Cached wake material
         private static Material _cachedWakeMaterial;
         private Collider[] shipColliderCache;
+        private ShipCollisionResolver collisionResolver;
 
         void Start()
         {
@@ -126,7 +127,7 @@ namespace POTCO
             }
 
             CreateCameraPoint();
-            AddShipColliders(); // Replaces AddDeckColliders and AddShipHullCollider
+            BuildShipCollision();
             CacheShipColliders();
 
             // Initialize bobbing
@@ -232,6 +233,8 @@ namespace POTCO
             {
                 projectile = cannonball.AddComponent<CannonProjectile>();
             }
+            projectile.SetOwnerRoot(transform.root);
+            projectile.SetInitialVelocity(arcDirection * muzzleVelocity, true);
 
             // Add bright trail renderer for visibility
             TrailRenderer trail = cannonball.GetComponent<TrailRenderer>();
@@ -979,39 +982,38 @@ namespace POTCO
             return null;
         }
 
-        private void AddShipColliders()
+        private void BuildShipCollision()
         {
-            Debug.Log("🔧 Adding mesh colliders to ship...");
-            int colliderCount = 0;
+            ShipHullColliderBuilder.BuildForShip(gameObject);
 
-            // Add colliders to all mesh renderers on the ship (deck, hull, etc.)
-            MeshFilter[] meshFilters = GetComponentsInChildren<MeshFilter>();
-            foreach (MeshFilter meshFilter in meshFilters)
+            collisionResolver = GetComponent<ShipCollisionResolver>();
+            if (collisionResolver == null)
             {
-                // Skip masts, cannons, and sails
-                if (meshFilter.name.ToLower().Contains("mast") ||
-                    meshFilter.name.ToLower().Contains("cannon") ||
-                    meshFilter.name.ToLower().Contains("sail"))
-                    continue;
-
-                // Get or Add mesh collider
-                Collider col = meshFilter.GetComponent<Collider>();
-                if (col == null && meshFilter.sharedMesh != null)
-                {
-                    MeshCollider meshCollider = meshFilter.gameObject.AddComponent<MeshCollider>();
-                    meshCollider.sharedMesh = meshFilter.sharedMesh;
-                    meshCollider.convex = false; // Use actual mesh shape
-                    col = meshCollider;
-                    colliderCount++;
-                }
+                collisionResolver = gameObject.AddComponent<ShipCollisionResolver>();
             }
-
-            Debug.Log($"✅ Added {colliderCount} new mesh colliders - player can now walk on deck and hull");
+            collisionResolver.RefreshContactColliders();
         }
 
         private void CacheShipColliders()
         {
-            shipColliderCache = transform.root.GetComponentsInChildren<Collider>(true);
+            shipColliderCache = ShipHullColliderBuilder.GetShipColliders(gameObject, true);
+        }
+
+        public void ApplyShipCollisionCorrection(Vector3 correction, float speedRetention)
+        {
+            correction.y = 0f;
+            basePosition += correction;
+
+            if (rb != null)
+            {
+                rb.MovePosition(rb.position + correction);
+            }
+            else
+            {
+                transform.position += correction;
+            }
+
+            currentSpeed *= Mathf.Clamp01(speedRetention);
         }
 
         /// <summary>
@@ -1035,7 +1037,7 @@ namespace POTCO
                 Vector3 direction = Quaternion.Euler(0, angle, 0) * -transform.forward;
 
                 RaycastHit hit;
-                if (Physics.Raycast(transform.position + Vector3.up * 5f, direction, out hit, shipCollisionDetectionRange))
+                if (Physics.Raycast(transform.position + Vector3.up * 5f, direction, out hit, shipCollisionDetectionRange, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
                 {
                     // Check if we hit another ship (AI or player)
                     ShipController otherPlayerShip = hit.collider.GetComponentInParent<ShipController>();

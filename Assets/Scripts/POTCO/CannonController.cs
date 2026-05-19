@@ -92,6 +92,7 @@ namespace POTCO
                                 private float burstResetTime = 0f;
                 
                                 private Vector3 initialPivotScale = Vector3.one;
+                                private static Material cachedTrailMaterial;
                 
                                 private Coroutine recoilCoroutine;
                 
@@ -527,28 +528,30 @@ namespace POTCO
                     {
                         projectile = cannonball.AddComponent<CannonProjectile>();
                     }
+                    projectile.SetOwnerRoot(transform.root);
+                    projectile.SetInitialVelocity(fireDirection * muzzleVelocity, true);
         
                     // Apply customization settings
                     projectile.damage = cannonballDamage;
                     projectile.explosionRadius = explosionRadius;
                     projectile.lifetime = cannonballLifetime;
         
-                    // Add trail on a separate child object to avoid physics issues
-                    GameObject trailObject = new GameObject("Trail");
-                    trailObject.transform.SetParent(cannonball.transform);
-                    trailObject.transform.localPosition = Vector3.zero;
-                    trailObject.transform.localRotation = Quaternion.identity;
-        
-                    TrailRenderer trail = trailObject.AddComponent<TrailRenderer>();
+                    // Match broadside cannonball trail setup: keep the trail on the projectile root.
+                    TrailRenderer trail = cannonball.GetComponent<TrailRenderer>();
+                    if (trail == null)
+                    {
+                        trail = cannonball.AddComponent<TrailRenderer>();
+                    }
                     trail.time = trailDuration;
                     trail.startWidth = trailStartWidth;
                     trail.endWidth = trailEndWidth;
-                    trail.material = new Material(Shader.Find("Sprites/Default"));
+                    trail.material = GetTrailMaterial();
                     trail.startColor = trailStartColor;
                     trail.endColor = trailEndColor;
                     trail.numCornerVertices = 5;
                     trail.numCapVertices = 5;
-                    trail.alignment = LineAlignment.TransformZ; // Keep trail facing forward regardless of rotation
+                    trail.Clear();
+                    projectile.trail = trail;
         
                     // Add glowing light for visibility
                     Light pointLight = cannonball.AddComponent<Light>();
@@ -604,6 +607,20 @@ namespace POTCO
         
                                 
         
+                                        private static Material GetTrailMaterial()
+                                        {
+                                            if (cachedTrailMaterial == null)
+                                            {
+                                                Shader shader = Shader.Find("Sprites/Default");
+                                                if (shader != null)
+                                                {
+                                                    cachedTrailMaterial = new Material(shader);
+                                                }
+                                            }
+
+                                            return cachedTrailMaterial;
+                                        }
+
                                         private System.Collections.IEnumerator RecoilAnimation()
         
                                         {
