@@ -738,15 +738,6 @@ namespace POTCO.ShipBuilder
                     currentShip.aiMaxHealth = Mathf.Max(100f, currentShip.aiMaxHealth);
                     EditorGUILayout.HelpBox("Ship health points (default: 1000)", MessageType.None);
 
-                    currentShip.aiRamChance = EditorGUILayout.Slider("Ram Chance", currentShip.aiRamChance, 0f, 0.2f);
-                    EditorGUILayout.HelpBox("Chance per second to attempt ram (default: 0.05 = 5%)", MessageType.None);
-
-                    currentShip.aiRamDamage = EditorGUILayout.Slider("Ram Damage", currentShip.aiRamDamage, 10f, 500f);
-                    EditorGUILayout.HelpBox("Damage dealt on ram collision (default: 100)", MessageType.None);
-
-                    currentShip.aiCirclePlayer = EditorGUILayout.Toggle("Circle Player", currentShip.aiCirclePlayer);
-                    EditorGUILayout.HelpBox("If enabled, ship circles player while firing. If disabled, ship lines up and holds steady. (default: false)", MessageType.None);
-
                     EditorGUI.indentLevel--;
                 }
 

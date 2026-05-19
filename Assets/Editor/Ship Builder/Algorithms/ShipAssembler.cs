@@ -181,7 +181,6 @@ namespace POTCO.ShipBuilder
                 // Map old combatDistance to new circle distance range
                 aiController.circleMinDistance = config.aiCircleDistance * 0.8f;
                 aiController.circleMaxDistance = config.aiCircleDistance * 1.2f;
-                aiController.ramDamage = config.aiRamDamage;
                 Debug.Log($"Added ShipAIController component (Speed: {config.aiMoveSpeed}, Detection: {config.aiAggroRange})");
 
                 // Note: ShipCombatSystem is automatically added by ShipAIController's [RequireComponent] attribute
