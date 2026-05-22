@@ -49,10 +49,6 @@ namespace POTCO
         [Tooltip("Maximum angle deviation before stopping volley (degrees)")]
         public float maxAngleDeviation = 45f;
 
-        [Header("Rigging Optimization")]
-        [Tooltip("Only pin rope ladder rigging while mast transition animations are changing it")]
-        public bool pinRopeLaddersDuringMastTransitions = true;
-
         [Header("Read-Only Status")]
         [SerializeField] private bool sailsDown = false;
         [SerializeField] private bool isFiring = false;
@@ -81,6 +77,7 @@ namespace POTCO
             public Transform ladderTransform;
             public Vector3 targetLocalPosition;
             public Quaternion targetLocalRotation;
+            public Vector3 targetLocalScale;
         }
 
         // Component storage
@@ -98,9 +95,6 @@ namespace POTCO
         private float lastFireTime = -999f;
         private bool currentFiringSide = false; // true = left, false = right
         private Coroutine sailTransitionCoroutine;
-        private Coroutine ropeLadderPinCoroutine;
-        private Coroutine ropeLadderApplyCoroutine;
-
         #endregion
 
         #region Initialization
@@ -118,7 +112,7 @@ namespace POTCO
 
         #endregion
 
-        #region Rigging Pinning
+        #region Rigging Preservation
 
         private void ApplyRopeLadderTransforms()
         {
@@ -131,64 +125,18 @@ namespace POTCO
 
                 ladderData.ladderTransform.localPosition = ladderData.targetLocalPosition;
                 ladderData.ladderTransform.localRotation = ladderData.targetLocalRotation;
+                ladderData.ladderTransform.localScale = ladderData.targetLocalScale;
             }
         }
 
         private void ScheduleRopeLadderApply()
         {
-            if (ropeLadders.Count == 0)
-            {
-                return;
-            }
-
-            if (ropeLadderApplyCoroutine != null)
-            {
-                StopCoroutine(ropeLadderApplyCoroutine);
-            }
-
-            ropeLadderApplyCoroutine = StartCoroutine(ApplyRopeLadderTransformsForFrames(2));
-        }
-
-        private IEnumerator ApplyRopeLadderTransformsForFrames(int frameCount)
-        {
             ApplyRopeLadderTransforms();
-
-            for (int i = 0; i < frameCount; i++)
-            {
-                yield return new WaitForEndOfFrame();
-                ApplyRopeLadderTransforms();
-            }
-
-            ropeLadderApplyCoroutine = null;
         }
 
         private void PinRopeLaddersFor(float duration)
         {
-            if (!pinRopeLaddersDuringMastTransitions || ropeLadders.Count == 0)
-            {
-                ScheduleRopeLadderApply();
-                return;
-            }
-
-            if (ropeLadderPinCoroutine != null)
-            {
-                StopCoroutine(ropeLadderPinCoroutine);
-            }
-
-            ropeLadderPinCoroutine = StartCoroutine(PinRopeLaddersForDuration(duration));
-        }
-
-        private IEnumerator PinRopeLaddersForDuration(float duration)
-        {
-            float endTime = Time.time + Mathf.Max(0.05f, duration);
-            while (Time.time < endTime)
-            {
-                yield return new WaitForEndOfFrame();
-                ApplyRopeLadderTransforms();
-            }
-
             ApplyRopeLadderTransforms();
-            ropeLadderPinCoroutine = null;
         }
 
         #endregion
@@ -236,6 +184,7 @@ namespace POTCO
                         {
                             Debug.Log($"[MAST DEBUG] RuntimeAnimatorPlayer component already exists on {actualMast.name}");
                         }
+                        anim.rebindBeforePlayback = false;
 
                         // Create mast animation data
                         MastAnimationData mastData = new MastAnimationData
@@ -250,33 +199,32 @@ namespace POTCO
                         // Find and store rope ladder positions
                         Transform leftLadder = FindChildRecursive(actualMast, "def_ladder_0_left");
                         Transform rightLadder = FindChildRecursive(actualMast, "def_ladder_0_right");
-                        List<Transform> riggingAnimationExclusions = new List<Transform>(2);
 
                         if (leftLadder != null)
                         {
+                            leftLadder = PreserveRopeLadderOutsideAnimatedHierarchy(actualMast, leftLadder);
                             ropeLadders.Add(new RopeLadderData
                             {
                                 ladderTransform = leftLadder,
                                 targetLocalPosition = leftLadder.localPosition,
-                                targetLocalRotation = leftLadder.localRotation
+                                targetLocalRotation = leftLadder.localRotation,
+                                targetLocalScale = leftLadder.localScale
                             });
-                            riggingAnimationExclusions.Add(leftLadder);
                             Debug.Log($"Stored left rope ladder position for {actualMast.name}");
                         }
 
                         if (rightLadder != null)
                         {
+                            rightLadder = PreserveRopeLadderOutsideAnimatedHierarchy(actualMast, rightLadder);
                             ropeLadders.Add(new RopeLadderData
                             {
                                 ladderTransform = rightLadder,
                                 targetLocalPosition = rightLadder.localPosition,
-                                targetLocalRotation = rightLadder.localRotation
+                                targetLocalRotation = rightLadder.localRotation,
+                                targetLocalScale = rightLadder.localScale
                             });
-                            riggingAnimationExclusions.Add(rightLadder);
                             Debug.Log($"Stored right rope ladder position for {actualMast.name}");
                         }
-
-                        anim.ExcludeTransformsFromAnimation(riggingAnimationExclusions);
                     }
                     else
                     {
@@ -310,12 +258,33 @@ namespace POTCO
             }
         }
 
+        private Transform PreserveRopeLadderOutsideAnimatedHierarchy(Transform mastRoot, Transform ladder)
+        {
+            if (mastRoot == null || ladder == null || ladder.parent == mastRoot)
+            {
+                return ladder;
+            }
+
+            Vector3 worldPosition = ladder.position;
+            Quaternion worldRotation = ladder.rotation;
+
+            ladder.SetParent(mastRoot, true);
+            ladder.position = worldPosition;
+            ladder.rotation = worldRotation;
+
+            return ladder;
+        }
+
         private Transform FindMastModel(Transform mastLocator)
         {
-            // The mastLocator IS the mast model (it was renamed by ShipAssembler)
-            // We just need to verify it has the skeletal structure inside
+            Transform mastRoot = FindTypedMastRoot(mastLocator);
+            if (mastRoot != null)
+            {
+                Debug.Log($"[FindMastModel] Found mast root at {mastRoot.name} (has MastTypeInfo)");
+                return mastRoot;
+            }
 
-            // Look for a SkinnedMeshRenderer inside to confirm this is a mast
+            // Look for renderable mast geometry inside to confirm this is a mast.
             SkinnedMeshRenderer skinnedMesh = mastLocator.GetComponentInChildren<SkinnedMeshRenderer>();
             if (skinnedMesh != null)
             {
@@ -323,8 +292,41 @@ namespace POTCO
                 return mastLocator; // Return the locator itself as it IS the mast root
             }
 
-            Debug.LogWarning($"[FindMastModel] No SkinnedMeshRenderer found in {mastLocator.name} - not a valid mast");
+            MeshFilter meshFilter = mastLocator.GetComponentInChildren<MeshFilter>();
+            if (meshFilter != null)
+            {
+                Debug.Log($"[FindMastModel] Found mast root at {mastLocator.name} (has MeshFilter: {meshFilter.name})");
+                return mastLocator;
+            }
+
+            Debug.LogWarning($"[FindMastModel] No SkinnedMeshRenderer or MeshFilter found in {mastLocator.name} - not a valid mast");
             return null;
+        }
+
+        private Transform FindTypedMastRoot(Transform mastLocator)
+        {
+            if (mastLocator == null)
+            {
+                return null;
+            }
+
+            MastTypeInfo[] mastInfos = mastLocator.GetComponentsInChildren<MastTypeInfo>(true);
+            foreach (MastTypeInfo mastInfo in mastInfos)
+            {
+                if (mastInfo != null && HasRenderableMastGeometry(mastInfo.transform))
+                {
+                    return mastInfo.transform;
+                }
+            }
+
+            return null;
+        }
+
+        private bool HasRenderableMastGeometry(Transform mastRoot)
+        {
+            return mastRoot != null &&
+                (mastRoot.GetComponentInChildren<SkinnedMeshRenderer>(true) != null ||
+                 mastRoot.GetComponentInChildren<MeshFilter>(true) != null);
         }
 
         private string GetMastType(Transform mastRoot)
@@ -398,10 +400,10 @@ namespace POTCO
                 Debug.Log($"[ANIM LOAD] ===== Loading animations for mast type: {mastData.mastType} =====");
 
                 // Construct the paths
-                string tiedUpPath = $"phase_3/models/char/pir_a_shp_mst_{mastData.mastType}_{tiedUpMastAnimation}";
-                string rollUpPath = $"phase_3/models/char/pir_a_shp_mst_{mastData.mastType}_{rollUpMastAnimation}";
-                string rollDownPath = $"phase_3/models/char/pir_a_shp_mst_{mastData.mastType}_{rollDownMastAnimation}";
-                string idlePath = $"phase_3/models/char/pir_a_shp_mst_{mastData.mastType}_{idleMastAnimation}";
+                string tiedUpPath = GetMastAnimationResourcePath(mastData.mastType, tiedUpMastAnimation);
+                string rollUpPath = GetMastAnimationResourcePath(mastData.mastType, rollUpMastAnimation);
+                string rollDownPath = GetMastAnimationResourcePath(mastData.mastType, rollDownMastAnimation);
+                string idlePath = GetMastAnimationResourcePath(mastData.mastType, idleMastAnimation);
 
                 Debug.Log($"[ANIM LOAD] Will try to load:");
                 Debug.Log($"[ANIM LOAD]   TiedUp: {tiedUpPath}");
@@ -503,6 +505,42 @@ namespace POTCO
 
             Debug.Log($"[ANIM LOAD]   ✗ Failed to load from: {path}");
             return null;
+        }
+
+        private string GetMastAnimationResourcePath(string mastType, string animationName)
+        {
+            string animationMastType = GetMastAnimationResourceType(mastType, animationName);
+            return $"phase_3/models/char/pir_a_shp_mst_{animationMastType}_{animationName}";
+        }
+
+        private string GetMastAnimationResourceType(string mastType, string animationName)
+        {
+            if (!IsSailTransitionAnimation(animationName))
+            {
+                return mastType;
+            }
+
+            switch (mastType)
+            {
+                case "main_square_skeletonA":
+                case "main_square_skeletonB":
+                    return "main_square";
+                case "main_tri_skeleton":
+                    return "main_tri";
+                case "fore_skeleton":
+                    return "fore_multi";
+                case "aft_skeleton":
+                    return "aft_tri";
+                default:
+                    return mastType;
+            }
+        }
+
+        private bool IsSailTransitionAnimation(string animationName)
+        {
+            return animationName == tiedUpMastAnimation ||
+                   animationName == rollUpMastAnimation ||
+                   animationName == rollDownMastAnimation;
         }
 
         #endregion

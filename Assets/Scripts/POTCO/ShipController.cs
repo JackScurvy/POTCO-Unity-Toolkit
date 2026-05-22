@@ -1,4 +1,6 @@
 using UnityEngine;
+using System.Diagnostics;
+using Debug = UnityEngine.Debug;
 using System.Collections;
 using System.Collections.Generic;
 
@@ -80,10 +82,26 @@ namespace POTCO
         // Movement acceleration
         private float currentSpeed = 0f;
 
-        // Cached wake material
-        private static Material _cachedWakeMaterial;
         private Collider[] shipColliderCache;
         private ShipCollisionResolver collisionResolver;
+
+        [Conditional("UNITY_EDITOR"), Conditional("DEVELOPMENT_BUILD")]
+        private static void Log(string message)
+        {
+            Debug.Log(message);
+        }
+
+        [Conditional("UNITY_EDITOR"), Conditional("DEVELOPMENT_BUILD")]
+        private static void LogWarning(string message)
+        {
+            Debug.LogWarning(message);
+        }
+
+        [Conditional("UNITY_EDITOR"), Conditional("DEVELOPMENT_BUILD")]
+        private static void LogError(string message)
+        {
+            Debug.LogError(message);
+        }
 
         void Start()
         {
@@ -140,18 +158,18 @@ namespace POTCO
                 cannonballPrefab = Resources.Load<GameObject>("phase_3/models/ammunition/cannonball");
                 if (cannonballPrefab != null)
                 {
-                    Debug.Log("Auto-loaded cannonball prefab from Resources");
+                    Log("Auto-loaded cannonball prefab from Resources");
                 }
             }
 
             // Debug info
             if (wheelTransform == null)
             {
-                Debug.LogError("ShipController: Wheel not found! Make sure the ship has a 'Wheel' child object.");
+                LogError("ShipController: Wheel not found! Make sure the ship has a 'Wheel' child object.");
             }
             else
             {
-                Debug.Log($"ShipController: Wheel found at {wheelTransform.position}");
+                Log($"ShipController: Wheel found at {wheelTransform.position}");
             }
 
             SetupShipWake();
@@ -190,7 +208,7 @@ namespace POTCO
 
             if (cannonballPrefab == null)
             {
-                // Debug.LogWarning("Cannot fire - cannonball prefab not assigned!"); // Commented out for perf
+                // LogWarning("Cannot fire - cannonball prefab not assigned!"); // Commented out for perf
                 return;
             }
 
@@ -300,7 +318,7 @@ namespace POTCO
                 }
             }
 
-            // Debug.Log($"[Player] Fired cannonball from {muzzle.name}"); // Removed for perf
+            // Log($"[Player] Fired cannonball from {muzzle.name}"); // Removed for perf
         }
 
         private void CreateCameraPoint()
@@ -319,13 +337,13 @@ namespace POTCO
         {
             if (wheelTransform == null)
             {
-                // Debug.LogWarning("ShipController: Wheel transform is null"); // Reduced spam
+                // LogWarning("ShipController: Wheel transform is null"); // Reduced spam
                 return;
             }
 
             if (mainCamera == null)
             {
-                // Debug.LogWarning("ShipController: Main camera is null");
+                // LogWarning("ShipController: Main camera is null");
                 return;
             }
 
@@ -337,7 +355,7 @@ namespace POTCO
                     playerTransform = FindPlayer();
                     if (playerTransform == null)
                     {
-                        // Debug.LogWarning("ShipController: Could not find player");
+                        // LogWarning("ShipController: Could not find player");
                     }
                 }
                 else
@@ -362,12 +380,12 @@ namespace POTCO
                 // Show on-screen prompt
                 if (Time.frameCount % 120 == 0) // Reduced log freq
                 {
-                    Debug.Log($"Press {enterControlKey} to control the ship!");
+                    Log($"Press {enterControlKey} to control the ship!");
                 }
 
                 if (Input.GetKeyDown(enterControlKey))
                 {
-                    Debug.Log("Shift key pressed, entering ship control...");
+                    Log("Shift key pressed, entering ship control...");
                     EnterShipControl();
                 }
             }
@@ -395,7 +413,7 @@ namespace POTCO
                         if (camParent.tag == "Untagged")
                         {
                             camParent.tag = "Player";
-                            Debug.Log($"Auto-tagged '{camParent.name}' as Player");
+                            Log($"Auto-tagged '{camParent.name}' as Player");
                         }
                         return camParent;
                     }
@@ -407,7 +425,7 @@ namespace POTCO
                         if (root.tag == "Untagged")
                         {
                             root.tag = "Player";
-                            Debug.Log($"Auto-tagged '{root.name}' as Player");
+                            Log($"Auto-tagged '{root.name}' as Player");
                         }
                         return root;
                     }
@@ -422,12 +440,12 @@ namespace POTCO
                 if (controller.tag == "Untagged")
                 {
                     controller.tag = "Player";
-                    Debug.Log($"Auto-tagged '{controller.name}' as Player");
+                    Log($"Auto-tagged '{controller.name}' as Player");
                 }
                 return controller;
             }
 
-            Debug.LogWarning("Could not find player - no Player tag, CharacterController, or main camera parent found");
+            LogWarning("Could not find player - no Player tag, CharacterController, or main camera parent found");
             return null;
         }
 
@@ -467,29 +485,29 @@ namespace POTCO
                 // The Model child inside has 180° offset, so player parent needs same rotation as wheel
                 playerTransform.rotation = wheelTransform.rotation;
 
-                Debug.Log($"Positioned player behind wheel at {playerTransform.position}");
-                Debug.Log($"Player rotation: {playerTransform.rotation.eulerAngles}");
-                Debug.Log($"Wheel rotation: {wheelTransform.rotation.eulerAngles}");
+                Log($"Positioned player behind wheel at {playerTransform.position}");
+                Log($"Player rotation: {playerTransform.rotation.eulerAngles}");
+                Log($"Wheel rotation: {wheelTransform.rotation.eulerAngles}");
             }
 
             // Play wheel_idle animation with correct gender prefix
             if (playerTransform != null)
             {
-                Debug.Log("🎬 Starting wheel_idle animation setup...");
+                Log("🎬 Starting wheel_idle animation setup...");
 
                 // Get the SimpleAnimationPlayer to determine gender
                 Player.SimpleAnimationPlayer animPlayer = playerTransform.GetComponent<Player.SimpleAnimationPlayer>();
                 if (animPlayer != null)
                 {
-                    Debug.Log($"Found SimpleAnimationPlayer, gender prefix: {animPlayer.GenderPrefix}");
+                    Log($"Found SimpleAnimationPlayer, gender prefix: {animPlayer.GenderPrefix}");
 
                     // Disable SimpleAnimationPlayer so it doesn't interfere with wheel_idle
                     animPlayer.enabled = false;
-                    Debug.Log("Disabled SimpleAnimationPlayer");
+                    Log("Disabled SimpleAnimationPlayer");
                 }
                 else
                 {
-                    Debug.LogWarning("⚠️ No SimpleAnimationPlayer found on player!");
+                    LogWarning("⚠️ No SimpleAnimationPlayer found on player!");
                 }
 
                 // Get the Animation component from Model child (or player itself)
@@ -497,76 +515,76 @@ namespace POTCO
                 Transform modelChild = playerTransform.Find("Model");
                 if (modelChild != null)
                 {
-                    Debug.Log($"Found Model child: {modelChild.name}");
+                    Log($"Found Model child: {modelChild.name}");
                     playerAnim = modelChild.GetComponent<RuntimeAnimatorPlayer>();
                     if (playerAnim != null)
                     {
-                        Debug.Log("✅ Found RuntimeAnimatorPlayer component on Model child");
+                        Log("✅ Found RuntimeAnimatorPlayer component on Model child");
                     }
                 }
 
                 if (playerAnim == null)
                 {
-                    Debug.Log("Searching for RuntimeAnimatorPlayer in children...");
+                    Log("Searching for RuntimeAnimatorPlayer in children...");
                     playerAnim = playerTransform.GetComponentInChildren<RuntimeAnimatorPlayer>();
                     if (playerAnim != null)
                     {
-                        Debug.Log($"✅ Found RuntimeAnimatorPlayer component on: {playerAnim.gameObject.name}");
+                        Log($"✅ Found RuntimeAnimatorPlayer component on: {playerAnim.gameObject.name}");
                     }
                 }
 
                 if (playerAnim == null)
                 {
-                    Debug.LogError("❌ No Animation component found on player!");
+                    LogError("❌ No Animation component found on player!");
                     return;
                 }
 
                 if (animPlayer == null)
                 {
-                    Debug.LogError("❌ No SimpleAnimationPlayer found on player!");
+                    LogError("❌ No SimpleAnimationPlayer found on player!");
                     return;
                 }
 
                 // Get gender prefix from SimpleAnimationPlayer
                 string genderPrefix = animPlayer.GenderPrefix;
-                Debug.Log($"Using gender prefix: {genderPrefix}");
+                Log($"Using gender prefix: {genderPrefix}");
 
                 // Load wheel_idle animation with gender prefix (searches all phases)
                 string wheelIdleAnimName = genderPrefix + "wheel_idle";
-                Debug.Log($"Looking for animation: {wheelIdleAnimName}");
+                Log($"Looking for animation: {wheelIdleAnimName}");
 
                 AnimationClip wheelIdleClip = LoadAnimationFromResources($"char/{wheelIdleAnimName}");
 
                 if (wheelIdleClip == null)
                 {
-                    Debug.Log($"Not found in char/, trying models/char/...");
+                    Log($"Not found in char/, trying models/char/...");
                     wheelIdleClip = LoadAnimationFromResources($"models/char/{wheelIdleAnimName}");
                 }
 
                 if (wheelIdleClip != null)
                 {
-                    Debug.Log($"✅ Loaded wheel_idle clip: {wheelIdleClip.name}, length: {wheelIdleClip.length}s");
+                    Log($"✅ Loaded wheel_idle clip: {wheelIdleClip.name}, length: {wheelIdleClip.length}s");
 
                     // Add and play wheel_idle animation
                     if (!playerAnim.HasClip("wheel_idle"))
                     {
                         playerAnim.AddClip(wheelIdleClip, "wheel_idle");
                         playerAnim.SetWrapMode("wheel_idle", WrapMode.Loop);
-                        Debug.Log("Added wheel_idle clip");
+                        Log("Added wheel_idle clip");
                     }
 
                     playerAnim.Play("wheel_idle");
 
                     // Verify it's playing
                     bool isPlaying = playerAnim.IsPlaying("wheel_idle");
-                    Debug.Log($"🎬 Animation playing status: {isPlaying}");
-                    Debug.Log($"✅ Playing {wheelIdleAnimName} animation on character at wheel");
+                    Log($"🎬 Animation playing status: {isPlaying}");
+                    Log($"✅ Playing {wheelIdleAnimName} animation on character at wheel");
                 }
                 else
                 {
-                    Debug.LogError($"❌ Could not find {wheelIdleAnimName} animation in Resources!");
-                    Debug.LogError($"   Tried: phase_3/char/{wheelIdleAnimName}");
-                    Debug.LogError($"   Tried: phase_3/models/char/{wheelIdleAnimName}");
+                    LogError($"❌ Could not find {wheelIdleAnimName} animation in Resources!");
+                    LogError($"   Tried: phase_3/char/{wheelIdleAnimName}");
+                    LogError($"   Tried: phase_3/models/char/{wheelIdleAnimName}");
                 }
             }
 
@@ -578,7 +596,7 @@ namespace POTCO
                 if (characterController != null)
                 {
                     characterController.enabled = false;
-                    Debug.Log("Disabled CharacterController to prevent sliding");
+                    Log("Disabled CharacterController to prevent sliding");
                 }
 
                 // Disable Player.PlayerController (movement script)
@@ -586,7 +604,7 @@ namespace POTCO
                 if (newPlayerController != null)
                 {
                     newPlayerController.enabled = false;
-                    Debug.Log("Disabled Player.PlayerController");
+                    Log("Disabled Player.PlayerController");
                 }
 
                 // Disable Player.PlayerCamera
@@ -594,7 +612,7 @@ namespace POTCO
                 if (playerCamera != null)
                 {
                     playerCamera.enabled = false;
-                    Debug.Log("Disabled Player.PlayerCamera");
+                    Log("Disabled Player.PlayerCamera");
                 }
 
                 // Disable NPCController if present (prevents AI trying to move while driving)
@@ -602,15 +620,15 @@ namespace POTCO
                 if (npcController != null)
                 {
                     npcController.enabled = false;
-                    Debug.Log("Disabled POTCO.NPCController");
+                    Log("Disabled POTCO.NPCController");
                 }
 
                 // Parent player to ship so they move together
                 playerTransform.SetParent(transform);
-                Debug.Log("Player parented to ship and positioned at wheel");
+                Log("Player parented to ship and positioned at wheel");
             }
 
-            Debug.Log("Entered ship control mode");
+            Log("Entered ship control mode");
         }
 
         private void HandleShipControls()
@@ -624,7 +642,7 @@ namespace POTCO
                 if (!combatSystem.AreSailsDown())
                 {
                     combatSystem.RollDownSails();
-                    Debug.Log("Rolling down sails - ship will start moving forward");
+                    Log("Rolling down sails - ship will start moving forward");
                 }
             }
 
@@ -634,7 +652,7 @@ namespace POTCO
                 if (combatSystem.AreSailsDown())
                 {
                     combatSystem.RollUpSails();
-                    Debug.Log("Rolling up sails - ship will stop");
+                    Log("Rolling up sails - ship will stop");
                 }
             }
 
@@ -782,14 +800,14 @@ namespace POTCO
             // Left broadside (Key 1)
             if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1))
             {
-                Debug.Log($"Firing LEFT broadside cannons!");
+                Log($"Firing LEFT broadside cannons!");
                 combatSystem.FireBroadside(true, true); // true = LEFT side, true = is player
             }
 
             // Right broadside (Key 2)
             if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2))
             {
-                Debug.Log($"Firing RIGHT broadside cannons!");
+                Log($"Firing RIGHT broadside cannons!");
                 combatSystem.FireBroadside(false, true); // false = RIGHT side, true = is player
             }
         }
@@ -810,7 +828,7 @@ namespace POTCO
             if (playerTransform != null)
             {
                 playerTransform.SetParent(null);
-                Debug.Log("Player unparented from ship");
+                Log("Player unparented from ship");
             }
 
             // Move player back onto the ship at the wheel position (in front of wheel, relative to ship)
@@ -828,7 +846,7 @@ namespace POTCO
                 // FORCE physics update to prevent CharacterController from waking up stuck
                 Physics.SyncTransforms();
 
-                Debug.Log($"Player exited ship control at position: {playerTransform.position}");
+                Log($"Player exited ship control at position: {playerTransform.position}");
             }
 
             // Restore camera to original state
@@ -860,7 +878,7 @@ namespace POTCO
                     if (playerAnim.HasClip("idle"))
                     {
                         playerAnim.Play("idle");
-                        Debug.Log("Reset player to idle animation");
+                        Log("Reset player to idle animation");
                     }
                 }
 
@@ -869,7 +887,7 @@ namespace POTCO
                 if (newPlayerController != null)
                 {
                     newPlayerController.enabled = true;
-                    Debug.Log("Re-enabled Player.PlayerController");
+                    Log("Re-enabled Player.PlayerController");
                 }
 
                 // Re-enable CharacterController
@@ -877,7 +895,7 @@ namespace POTCO
                 if (characterController != null)
                 {
                     characterController.enabled = true;
-                    Debug.Log("Re-enabled CharacterController");
+                    Log("Re-enabled CharacterController");
                 }
 
                 // Re-enable Player.PlayerCamera
@@ -885,7 +903,7 @@ namespace POTCO
                 if (playerCamera != null)
                 {
                     playerCamera.enabled = true;
-                    Debug.Log("Re-enabled Player.PlayerCamera");
+                    Log("Re-enabled Player.PlayerCamera");
                 }
 
                 // Re-enable NPCController
@@ -893,7 +911,7 @@ namespace POTCO
                 if (npcController != null)
                 {
                     npcController.enabled = true;
-                    Debug.Log("Re-enabled POTCO.NPCController");
+                    Log("Re-enabled POTCO.NPCController");
                 }
 
                 // Re-enable SimpleAnimationPlayer to restore normal animations
@@ -901,16 +919,16 @@ namespace POTCO
                 if (animPlayer != null)
                 {
                     animPlayer.enabled = true;
-                    Debug.Log("Re-enabled SimpleAnimationPlayer");
+                    Log("Re-enabled SimpleAnimationPlayer");
                 }
             }
 
-            Debug.Log("Exited ship control mode - returned to ship");
+            Log("Exited ship control mode - returned to ship");
         }
 
         private AnimationClip LoadAnimationFromResources(string path)
         {
-            Debug.Log($"[ANIM LOAD]   Attempting to load: {path}");
+            Log($"[ANIM LOAD]   Attempting to load: {path}");
 
             // If path doesn't start with phase_, search all phases
             if (!path.StartsWith("phase_"))
@@ -922,11 +940,11 @@ namespace POTCO
                     AnimationClip foundClip = LoadAnimationFromResourcesDirect(fullPath);
                     if (foundClip != null)
                     {
-                        Debug.Log($"[ANIM LOAD]   ✓ Found in {phase}");
+                        Log($"[ANIM LOAD]   ✓ Found in {phase}");
                         return foundClip;
                     }
                 }
-                Debug.Log($"[ANIM LOAD]   ✗ Not found in any phase directory");
+                Log($"[ANIM LOAD]   ✗ Not found in any phase directory");
                 return null;
             }
             else
@@ -942,7 +960,7 @@ namespace POTCO
             AnimationClip directClip = Resources.Load<AnimationClip>(path);
             if (directClip != null)
             {
-                Debug.Log($"[ANIM LOAD]   ✓ Loaded AnimationClip directly: {directClip.name}");
+                Log($"[ANIM LOAD]   ✓ Loaded AnimationClip directly: {directClip.name}");
                 return directClip;
             }
 
@@ -950,7 +968,7 @@ namespace POTCO
             GameObject animObj = Resources.Load<GameObject>(path);
             if (animObj != null)
             {
-                Debug.Log($"[ANIM LOAD]   Loaded GameObject from Resources");
+                Log($"[ANIM LOAD]   Loaded GameObject from Resources");
 
                 // Note: Animation component no longer used
                 // AnimationClips should be loaded directly from Resources
@@ -960,11 +978,11 @@ namespace POTCO
             AnimationClip clip = Resources.Load<AnimationClip>(path);
             if (clip != null)
             {
-                Debug.Log($"[ANIM LOAD]   ✓ Loaded AnimationClip directly: {clip.name}");
+                Log($"[ANIM LOAD]   ✓ Loaded AnimationClip directly: {clip.name}");
                 return clip;
             }
 
-            Debug.Log($"[ANIM LOAD]   ✗ Failed to load from: {path}");
+            Log($"[ANIM LOAD]   ✗ Failed to load from: {path}");
             return null;
         }
 
@@ -1099,145 +1117,7 @@ namespace POTCO
 
         private void SetupShipWake()
         {
-            // 1. Add ShipWake component if missing
-            ShipWake wake = GetComponent<ShipWake>();
-            if (wake == null)
-            {
-                wake = gameObject.AddComponent<ShipWake>();
-            }
-
-            // 2. Create/Cache Material
-            if (_cachedWakeMaterial == null)
-            {
-                Shader s = Shader.Find("POTCO/WakeShader");
-                if (s != null)
-                {
-                    _cachedWakeMaterial = new Material(s);
-                    
-                    // Load RGB texture
-                    Texture tex = Resources.Load<Texture>("phase_2/maps/Wake");
-                    if (tex != null) _cachedWakeMaterial.mainTexture = tex;
-
-                    // Load Alpha texture (Wake_a)
-                    Texture texAlpha = Resources.Load<Texture>("phase_2/maps/Wake_a");
-                    if (texAlpha != null) 
-                    {
-                        _cachedWakeMaterial.SetTexture("_AlphaTex", texAlpha);
-                    }
-                }
-            }
-
-            // Calculate Ship Dimensions
-            Bounds shipBounds = new Bounds(transform.position, Vector3.zero);
-            bool boundsInit = false;
-            Renderer[] allRenderers = GetComponentsInChildren<Renderer>();
-            
-            foreach (var r in allRenderers)
-            {
-                if (r is ParticleSystemRenderer || r is TrailRenderer) continue;
-                if (r.name.Contains("Wake") || r.name.Contains("Bow")) continue;
-                
-                if (!boundsInit)
-                {
-                    shipBounds = r.bounds;
-                    boundsInit = true;
-                }
-                else
-                {
-                    shipBounds.Encapsulate(r.bounds);
-                }
-            }
-            
-            float shipLength = shipBounds.size.z;
-            
-            // Determine Class and Settings based on length
-            // POTCO Source values:
-            // Warship (L3): Offset 125, Scale 0.6
-            // Merchant (L2): Offset 80, Scale 0.5
-            // Interceptor (L1): Offset 22.5, Scale 0.18
-            
-            float wakeOffsetZ;
-            float wakeScale;
-            
-            if (shipLength > 450f) // Large (Warship) - observed ~616
-            {
-                wakeOffsetZ = 125.0f;
-                wakeScale = 0.6f;
-            }
-            else if (shipLength > 150f) // Medium (Merchant/Brig) - observed ~312
-            {
-                wakeOffsetZ = 80.0f;
-                wakeScale = 0.5f;
-            }
-            else // Small (Sloop/Interceptor)
-            {
-                wakeOffsetZ = 22.5f;
-                wakeScale = 0.18f;
-            }
-
-            Debug.Log($"[ShipController] SetupWake: Length={shipLength:F1} -> Offset={wakeOffsetZ}, Scale={wakeScale}");
-
-            // 3. Setup Stern Wake (Using wake_zero.egg)
-            if (wake.sternAnchor == null)
-            {
-                Transform t = FindChildRecursive(transform, "SternWake");
-                if (t == null)
-                {
-                    GameObject prefab = Resources.Load<GameObject>("phase_2/models/sea/wake_zero");
-                    if (prefab != null)
-                    {
-                        GameObject go = Instantiate(prefab, transform);
-                        go.name = "SternWake";
-                        
-                        // Position: Aft centerline at waterline with per-class Z offset
-                        // Assuming ship origin is center, Stern is -Z.
-                        // User said "move +Z ... behind stern" which was ambiguous, 
-                        // but standard POTCO "wake_offset_y" usually means distance from origin.
-                        // We will place it at -wakeOffsetZ.
-                        go.transform.localPosition = new Vector3(0, 0.5f, -wakeOffsetZ);
-                        go.transform.localRotation = Quaternion.identity;
-                        
-                        // Scale: Uniform per class
-                        go.transform.localScale = Vector3.one * wakeScale;
-                        
-                        Renderer[] renderers = go.GetComponentsInChildren<Renderer>();
-                        wake.wakeRenderers = renderers;
-                        wake.sternAnchor = go.transform;
-                        
-                        // Find Bones
-                        Transform[] bones = new Transform[4];
-                        bones[0] = FindChildRecursive(go.transform, "def_wake_1");
-                        bones[1] = FindChildRecursive(go.transform, "def_wake_2");
-                        bones[2] = FindChildRecursive(go.transform, "def_wake_3");
-                        bones[3] = FindChildRecursive(go.transform, "def_wake_4");
-                        wake.wakeBones = bones;
-                        
-                        if (_cachedWakeMaterial != null)
-                        {
-                            foreach (var wakeR in renderers) wakeR.material = _cachedWakeMaterial;
-                        }
-                        t = go.transform;
-                    }
-                }
-                else
-                {
-                    wake.wakeRenderers = t.GetComponentsInChildren<Renderer>();
-                    wake.sternAnchor = t;
-                    
-                    // Re-find bones
-                    Transform[] bones = new Transform[4];
-                    bones[0] = FindChildRecursive(t, "def_wake_1");
-                    bones[1] = FindChildRecursive(t, "def_wake_2");
-                    bones[2] = FindChildRecursive(t, "def_wake_3");
-                    bones[3] = FindChildRecursive(t, "def_wake_4");
-                    wake.wakeBones = bones;
-                }
-            }
-            
-            wake.UpdateColor();
-            
-            // Force wake to recapture the new positions we just set
-            wake.RecaptureOffsets();
+            ShipWakeUtility.EnsureWake(gameObject);
         }
     }
 }

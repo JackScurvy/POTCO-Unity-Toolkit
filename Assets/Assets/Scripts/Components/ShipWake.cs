@@ -8,6 +8,9 @@ namespace POTCO
     /// </summary>
     public class ShipWake : MonoBehaviour
     {
+        public const float DefaultTurnTime = 0.13f;
+        public const float DefaultReturnTime = 0.52f;
+
         [Header("References")]
         [Tooltip("Transform where the wake strip starts (Stern)")]
         public Transform sternAnchor;
@@ -53,9 +56,9 @@ namespace POTCO
         
         [Header("Smoothing Settings")]
         [Tooltip("Time to reach full turn bend (seconds)")]
-        public float turnTime = 0.1f;
+        public float turnTime = DefaultTurnTime;
         [Tooltip("Time to snap back to straight (seconds) - make this larger for slower return")]
-        public float returnTime = 0.4f;
+        public float returnTime = DefaultReturnTime;
         
         // Initial local rotations of bones to apply additive rotation
         private Quaternion[] initialBoneRotations;
@@ -132,7 +135,19 @@ namespace POTCO
         void OnDestroy()
         {
             // Clean up detached objects
-            if (sternAnchor) Destroy(sternAnchor.gameObject);
+            if (!sternAnchor)
+            {
+                return;
+            }
+
+            if (Application.isPlaying)
+            {
+                Destroy(sternAnchor.gameObject);
+            }
+            else
+            {
+                DestroyImmediate(sternAnchor.gameObject);
+            }
         }
 
         void Update()

@@ -18,7 +18,7 @@ namespace POTCO
             "cannon",
             "rope",
             "ladder",
-            "rig",
+            "rigging",
             "flag",
             "wake",
             "trail",
@@ -29,6 +29,10 @@ namespace POTCO
             "camera",
             "wheel",
             "contactproxy"
+        };
+        private static readonly string[] ExcludedNameTokens =
+        {
+            "rig"
         };
 
         public struct BuildReport
@@ -255,6 +259,14 @@ namespace POTCO
                     }
                 }
 
+                foreach (string excludedNameToken in ExcludedNameTokens)
+                {
+                    if (HasNameToken(name, excludedNameToken))
+                    {
+                        return false;
+                    }
+                }
+
                 if (current == root)
                 {
                     break;
@@ -271,6 +283,29 @@ namespace POTCO
             }
 
             return true;
+        }
+
+        private static bool HasNameToken(string name, string token)
+        {
+            int tokenStart = 0;
+            for (int i = 0; i <= name.Length; i++)
+            {
+                if (i < name.Length && char.IsLetterOrDigit(name[i]))
+                {
+                    continue;
+                }
+
+                if (i > tokenStart &&
+                    i - tokenStart == token.Length &&
+                    string.Compare(name, tokenStart, token, 0, token.Length, StringComparison.Ordinal) == 0)
+                {
+                    return true;
+                }
+
+                tokenStart = i + 1;
+            }
+
+            return false;
         }
     }
 }

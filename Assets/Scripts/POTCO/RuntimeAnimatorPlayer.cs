@@ -28,6 +28,9 @@ namespace POTCO
         private int currentClipIndex = -1;
         private bool isInitialized = false;
 
+        [Tooltip("Rebind the Animator before playback. Disable for animation roots that intentionally preserve unanimated child transforms.")]
+        public bool rebindBeforePlayback = true;
+
         // Crossfade tracking
         private Coroutine crossfadeCoroutine = null;
 
@@ -212,11 +215,7 @@ namespace POTCO
                 crossfadeCoroutine = null;
             }
 
-            // Reset animator to bind pose to ensure clean state
-            if (animator != null)
-            {
-                animator.Rebind();
-            }
+            RebindAnimatorIfNeeded();
 
             // Set all weights to 0 except the target clip
             foreach (var kvp in clipIndices)
@@ -292,11 +291,7 @@ namespace POTCO
         {
             int toIndex = clipIndices[toClipName];
 
-            // Reset animator to bind pose to ensure clean state
-            if (animator != null)
-            {
-                animator.Rebind();
-            }
+            RebindAnimatorIfNeeded();
 
             // CRITICAL FIX: Don't use currentClipIndex (it's outdated during crossfades!)
             // Instead, find the clip with the highest weight RIGHT NOW
@@ -435,6 +430,14 @@ namespace POTCO
             crossfadeCoroutine = null;
 
             DebugLogger.LogRuntimeAnimator($"✅ Crossfade complete: {fromClipName} → {toClipName} on {gameObject.name}");
+        }
+
+        private void RebindAnimatorIfNeeded()
+        {
+            if (rebindBeforePlayback && animator != null)
+            {
+                animator.Rebind();
+            }
         }
 
         /// <summary>

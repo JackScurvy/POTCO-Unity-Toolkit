@@ -153,7 +153,7 @@ namespace Player
                     IsFreeLooking = playerController.IsFreeLooking,
                     IsRunning = playerController.IsRunning,
                     IsFalling = playerController.IsFalling,
-                    IsSwimming = playerController.IsSwimming
+                    IsSwimming = playerController.IsSwimming || playerController.IsTouchingWater
                 };
             }
 

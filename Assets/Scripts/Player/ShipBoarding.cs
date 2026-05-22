@@ -21,12 +21,14 @@ namespace Player
 
         private PlayerController playerController;
         private SimpleAnimationPlayer animPlayer;
+        private CharacterController characterController;
         private bool isBoarding = false;
 
         private void Awake()
         {
             playerController = GetComponent<PlayerController>();
             animPlayer = GetComponent<SimpleAnimationPlayer>();
+            characterController = GetComponent<CharacterController>();
         }
 
         private void Update()
@@ -79,7 +81,10 @@ namespace Player
             Debug.Log($"⚓ Boarding ship: {ship.name}");
 
             // 1. Disable Controls & Animation Logic
+            playerController.ClearSwimmingState();
+            SetPlayerCollisionWithShip(ship, false);
             playerController.enabled = false;
+            if (characterController != null) characterController.enabled = false;
             if (animPlayer != null) animPlayer.enabled = false; // STOP SimpleAnimationPlayer from overriding us
             
             // 2. Find Target (Wheel)
@@ -88,6 +93,7 @@ namespace Player
             {
                 Debug.LogWarning("❌ Could not find Wheel on ship! Aborting boarding.");
                 playerController.enabled = true;
+                if (characterController != null) characterController.enabled = true;
                 if (animPlayer != null) animPlayer.enabled = true;
                 isBoarding = false;
                 yield break;
@@ -97,6 +103,7 @@ namespace Player
             Vector3 startPos = transform.position;
             Vector3 endPos = wheel.position - (wheel.forward * 1.5f); 
             endPos.y = wheel.position.y; 
+            endPos = ResolveLandingPosition(ship, endPos);
 
             // High Point: Directly above start position
             Vector3 highPoint = startPos;
@@ -170,13 +177,18 @@ namespace Player
             }
 
             // Finish landing
+            SetPlayerCollisionWithShip(ship, false);
             transform.position = endPos; 
             transform.rotation = wheel.rotation * Quaternion.Euler(0, 180, 0);
+            Physics.SyncTransforms();
             
             // Wait for dismount to finish (if any time left)
             yield return new WaitForSeconds(0.2f);
 
             // 6. Finish
+            playerController.ClearSwimmingState();
+            SetPlayerCollisionWithShip(ship, false);
+            if (characterController != null) characterController.enabled = true;
             playerController.enabled = true;
             if (animPlayer != null) animPlayer.enabled = true; // Restore animation logic
             isBoarding = false;
@@ -187,11 +199,82 @@ namespace Player
             yield return new WaitForSeconds(0.5f);
 
             // 6. Finish
+            playerController.ClearSwimmingState();
+            SetPlayerCollisionWithShip(ship, false);
+            if (characterController != null) characterController.enabled = true;
             playerController.enabled = true;
             if (animPlayer != null) animPlayer.enabled = true; // Restore animation logic
             isBoarding = false;
             
             // Reset to idle (SimpleAnimationPlayer will take over next frame anyway)
+        }
+
+        /// <summary>
+        /// Finds the top ship collider under the desired wheel landing point.
+        /// </summary>
+        private Vector3 ResolveLandingPosition(Transform ship, Vector3 desiredPosition)
+        {
+            Vector3 resolvedPosition = desiredPosition;
+            float bestY = float.NegativeInfinity;
+            Vector3 rayOrigin = desiredPosition + Vector3.up * 100f;
+            RaycastHit[] hits = Physics.RaycastAll(rayOrigin, Vector3.down, 200f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+
+            foreach (RaycastHit hit in hits)
+            {
+                if (hit.collider == null || !IsShipCollider(ship, hit.collider) || hit.normal.y < 0.25f)
+                {
+                    continue;
+                }
+
+                if (hit.point.y > bestY)
+                {
+                    bestY = hit.point.y;
+                    resolvedPosition = hit.point + Vector3.up * GetControllerBottomOffset();
+                }
+            }
+
+            return resolvedPosition;
+        }
+
+        private float GetControllerBottomOffset()
+        {
+            if (characterController == null)
+            {
+                return 0.1f;
+            }
+
+            return (characterController.height * 0.5f) - characterController.center.y + characterController.skinWidth + 0.05f;
+        }
+
+        private void SetPlayerCollisionWithShip(Transform ship, bool ignored)
+        {
+            Collider[] shipColliders = ship != null ? ship.GetComponentsInChildren<Collider>(true) : null;
+            Collider[] playerColliders = GetComponentsInChildren<Collider>(true);
+            if (shipColliders == null || playerColliders == null)
+            {
+                return;
+            }
+
+            foreach (Collider shipCollider in shipColliders)
+            {
+                if (shipCollider == null || shipCollider.isTrigger)
+                {
+                    continue;
+                }
+
+                foreach (Collider playerCollider in playerColliders)
+                {
+                    if (playerCollider != null && playerCollider != shipCollider)
+                    {
+                        Physics.IgnoreCollision(shipCollider, playerCollider, ignored);
+                    }
+                }
+            }
+        }
+
+        private static bool IsShipCollider(Transform ship, Collider collider)
+        {
+            return ship != null && collider != null && (collider.transform == ship || collider.transform.IsChildOf(ship));
         }
 
         /// <summary>

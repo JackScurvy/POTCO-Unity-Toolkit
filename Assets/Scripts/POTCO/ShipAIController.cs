@@ -173,6 +173,7 @@ namespace POTCO
             ConfigureRigidbody();
             BuildShipCollision();
             CacheShipColliders();
+            ShipWakeUtility.EnsureWake(gameObject);
 
             playerTransform = playerTransform != null ? playerTransform : FindPlayer();
             playerRb = playerTransform != null ? playerTransform.GetComponent<Rigidbody>() : null;
@@ -968,16 +969,24 @@ namespace POTCO
                 return;
             }
 
+            bool shouldIgnorePlayer = IsSharedPlayerSwimming();
             foreach (Collider shipCollider in shipColliders)
             {
                 foreach (Collider playerCollider in playerColliders)
                 {
                     if (shipCollider != null && playerCollider != null)
                     {
-                        Physics.IgnoreCollision(shipCollider, playerCollider, true);
+                        Physics.IgnoreCollision(shipCollider, playerCollider, shouldIgnorePlayer);
                     }
                 }
             }
+        }
+
+        private static bool IsSharedPlayerSwimming()
+        {
+            GameObject player = GetSharedPlayerObject();
+            Player.PlayerController playerController = player != null ? player.GetComponent<Player.PlayerController>() : null;
+            return playerController != null && playerController.IsSwimming;
         }
 
         public void ApplyShipCollisionCorrection(Vector3 correction, float speedRetention)

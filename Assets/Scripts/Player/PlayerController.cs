@@ -68,6 +68,7 @@ namespace Player
         private float currentSpeed;
         private bool isGrounded;
         private bool isSwimming;
+        private bool isTouchingWater;
         private float lastGroundedTime;
         private float lastJumpTime;
 
@@ -157,14 +158,17 @@ namespace Player
                     if (oceanManager != null) Debug.Log("🌊 PlayerController found OceanManager!");
                 }
                 
-                if (oceanManager == null) return;
+                if (oceanManager == null)
+                {
+                    isTouchingWater = false;
+                    return;
+                }
             }
-
-            // Prevent re-entering swim state immediately after exiting (0.5s cooldown)
-            if (Time.time - lastSwimExitTime < 0.5f) return;
 
             float waterLevel = oceanManager.GetWaterHeightAt(transform.position);
             float playerY = transform.position.y;
+            float swimSurfaceY = GetSwimSurfaceY(waterLevel);
+            isTouchingWater = IsPlayerTouchingWater(playerY, waterLevel);
             
             // Debug logs (thottled)
             if (Time.frameCount % 60 == 0 && showDebugGizmos)
@@ -174,8 +178,11 @@ namespace Player
 
             if (!isSwimming)
             {
+                // Prevent re-entering swim state immediately after exiting (0.5s cooldown)
+                if (Time.time - lastSwimExitTime < 0.5f) return;
+
                 // Enter swimming if below threshold
-                if (playerY < waterLevel - swimDepthThreshold)
+                if (isTouchingWater)
                 {
                     Debug.Log("🌊 Entering Swim State!");
                     isSwimming = true;
@@ -188,7 +195,7 @@ namespace Player
                 // Exit swimming logic
                 // 1. Must be high enough (close to surface or out of water)
                 // 2. Must find ACTUAL ground beneath us to step out onto
-                bool isHighEnough = playerY > waterLevel - swimDepthThreshold + 0.1f;
+                bool isHighEnough = playerY > swimSurfaceY;
                 
                 if (isHighEnough)
                 {
@@ -217,12 +224,57 @@ namespace Player
 
                     if (foundValidGround)
                     {
-                         isSwimming = false;
-                         verticalVelocity = 4f; // Small hop out
-                         lastSwimExitTime = Time.time; // Set cooldown
+                         ExitSwimming(4f); // Small hop out
                     }
                 }
             }
+        }
+
+        public void ClearSwimmingState()
+        {
+            ExitSwimming(0f);
+        }
+
+        private float GetSwimSurfaceY(float waterLevel)
+        {
+            return waterLevel - swimDepthThreshold;
+        }
+
+        private bool IsPlayerTouchingWater(float playerY, float waterLevel)
+        {
+            return playerY <= GetSwimSurfaceY(waterLevel);
+        }
+
+        private float CalculateSwimVerticalSpeed(float currentY, float waterLevel, bool swimUpHeld)
+        {
+            float targetY = waterLevel - swimLevelOffset;
+            float depthOffset = targetY - currentY;
+            float targetVerticalSpeed = 0f;
+
+            if (depthOffset > 0.02f)
+            {
+                targetVerticalSpeed = Mathf.Clamp(depthOffset * 5f, 0f, 5f);
+                if (swimUpHeld)
+                {
+                    targetVerticalSpeed = Mathf.Max(targetVerticalSpeed, 5f);
+                }
+            }
+            else if (depthOffset < -0.02f)
+            {
+                targetVerticalSpeed = -Mathf.Clamp(-depthOffset * 5f, 0f, 5f);
+            }
+
+            return targetVerticalSpeed - swimGravity;
+        }
+
+        private void ExitSwimming(float exitVerticalVelocity)
+        {
+            if (!isSwimming) return;
+
+            isSwimming = false;
+            verticalVelocity = exitVerticalVelocity;
+            jumpPressed = false;
+            lastSwimExitTime = Time.time;
         }
 
         private void LateUpdate()
@@ -375,34 +427,17 @@ namespace Player
                 isGrounded = false;
 
                 float waterLevel = oceanManager != null ? oceanManager.GetWaterHeightAt(transform.position) : transform.position.y + swimLevelOffset;
-                float targetY = waterLevel - swimLevelOffset;
                 float currentY = transform.position.y;
-                
-                // Calculate desired vertical behavior
-                float targetVerticalSpeed = 0f;
 
-                // 1. Buoyancy: If below target depth, rise up
-                if (currentY < targetY)
-                {
-                    float depth = targetY - currentY;
-                    // Stronger buoyancy the deeper we are, capped at max speed
-                    targetVerticalSpeed = Mathf.Clamp(depth * 5f, 0f, 5f);
-                }
-                
-                // 2. Swim Up Input (Space) overrides buoyancy speed if higher
-                if (Input.GetButton("Jump"))
-                {
-                    targetVerticalSpeed = Mathf.Max(targetVerticalSpeed, 5f);
-                }
-
-                // 3. Apply Swim Gravity (subtract from upward speed)
-                targetVerticalSpeed -= swimGravity;
+                // Buoyancy returns the player to swim depth, but jump cannot lift them out of the water.
+                float targetVerticalSpeed = CalculateSwimVerticalSpeed(currentY, waterLevel, Input.GetButton("Jump"));
 
                 // Apply smoothed velocity change
                 verticalVelocity = Mathf.Lerp(verticalVelocity, targetVerticalSpeed, Time.deltaTime * 5f);
 
                 // Move
                 controller.Move((moveDirection * currentSpeed + new Vector3(0, verticalVelocity, 0)) * Time.deltaTime);
+                jumpPressed = false;
                 return;
             }
 
@@ -492,6 +527,7 @@ namespace Player
         // Public API
         public bool IsGrounded => isGrounded;
         public bool IsSwimming => isSwimming;
+        public bool IsTouchingWater => isTouchingWater;
         public float CurrentSpeed => currentSpeed;
         public Vector3 Velocity => controller.velocity; // Return actual controller velocity for accurate reading
         public Vector2 MoveInput => moveInput;
