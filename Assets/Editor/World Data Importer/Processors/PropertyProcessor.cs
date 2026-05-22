@@ -740,6 +740,44 @@ namespace WorldDataImporter.Processors
             // (moved to SceneBuildingAlgorithm when object is complete)
         }
 
+        public static void ApplyNpcWorldPlacementFromGridPos(GameObject currentGO, ObjectData objectData)
+        {
+            if (currentGO == null || objectData == null)
+                return;
+
+            if (objectData.gridPos.HasValue && !objectData.hasPos)
+            {
+                Quaternion sourceHprRotation = currentGO.transform.localRotation;
+
+                if (currentGO.transform.parent != null)
+                {
+                    Vector3 localPos = currentGO.transform.parent.InverseTransformPoint(objectData.gridPos.Value);
+                    currentGO.transform.localPosition = localPos;
+                    DebugLogger.LogNPCImport($"NPC GridPos world placement: grid={objectData.gridPos.Value}, local={localPos}");
+                }
+                else
+                {
+                    currentGO.transform.localPosition = objectData.gridPos.Value;
+                    DebugLogger.LogNPCImport($"NPC GridPos world placement without parent: {objectData.gridPos.Value}");
+                }
+
+                currentGO.transform.rotation = sourceHprRotation;
+                return;
+            }
+
+            if (objectData.properties != null && objectData.properties.ContainsKey("Pos_Vector"))
+            {
+                string[] posParts = objectData.properties["Pos_Vector"].Split(',');
+                Vector3 posValue = new Vector3(
+                    float.Parse(posParts[0]),
+                    float.Parse(posParts[1]),
+                    float.Parse(posParts[2])
+                );
+                currentGO.transform.localPosition = posValue;
+                DebugLogger.LogNPCImport($"Applied stored NPC Pos: {posValue}");
+            }
+        }
+
         public static void SpawnNPC(GameObject currentGO, ObjectData objectData, ImportStatistics stats)
         {
             try
@@ -856,6 +894,7 @@ namespace WorldDataImporter.Processors
                     }
 
                     // Parent NPC model to positioned GameObject
+                    ApplyNpcWorldPlacementFromGridPos(currentGO, objectData);
                     instance.transform.SetParent(currentGO.transform, false);
                     DebugLogger.LogNPCImport($"👤 Spawned custom NPC model: {modelPath}");
 
@@ -1051,6 +1090,7 @@ namespace WorldDataImporter.Processors
                     }
 
                     // Parent NPC model to positioned GameObject
+                    ApplyNpcWorldPlacementFromGridPos(currentGO, objectData);
                     instance.transform.SetParent(currentGO.transform, false);
 
                     // Mark all transforms dirty AFTER parenting to save body shape changes (CRITICAL!)
