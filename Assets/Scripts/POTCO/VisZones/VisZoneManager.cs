@@ -1,6 +1,5 @@
 using UnityEngine;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace POTCO.VisZones
 {
@@ -24,7 +23,7 @@ namespace POTCO.VisZones
         [SerializeField]
         private string currentZone = "";
 
-        [Tooltip("All zones player is currently inside (for overlap handling)")]
+        [Tooltip("Last reported zone candidates; POTCO visibility uses one current zone")]
         [SerializeField]
         private List<string> currentPlayerZones = new List<string>();
 
@@ -38,10 +37,12 @@ namespace POTCO.VisZones
 
         // Store original renderer states for Large objects and named statics (preserves character clothing, etc.)
         private Dictionary<Renderer, bool> objectRendererStates = new Dictionary<Renderer, bool>();
+        private Dictionary<Collider, bool> objectColliderStates = new Dictionary<Collider, bool>();
+        private Transform runtimeColliderRoot;
 
-        // Cache of physically overlapping zones (generated at startup)
-        // Maps ZoneName -> List of names of other zones that physically intersect/overlap it
-        private Dictionary<string, List<string>> overlappingZoneMap = new Dictionary<string, List<string>>();
+        private const string CollisionZonePrefix = "collision_zone_";
+        private const string RuntimeColliderRootName = "VisZone_RuntimeColliders";
+        private const float RuntimeZoneColliderHeight = 2000f;
 
         private void Awake()
         {
@@ -53,11 +54,9 @@ namespace POTCO.VisZones
 
             // Build dictionaries for fast lookups
             BuildSectionDictionary();
+            EnsureZoneColliders();
             BuildObjectUidDictionary();
             BuildNamedStaticDictionary();
-            
-            // Build physical overlap map to ensure nested/overlapping zones are always visible together
-            BuildOverlappingZoneMap();
 
             // Initially hide all sections
             foreach (var section in zoneSections)
@@ -65,70 +64,21 @@ namespace POTCO.VisZones
                 section.Hide();
             }
 
-            // NOTE: Large objects (tracked by UID) start VISIBLE by default
-            // They will be hidden when entering zones that don't reference them
-            // This matches POTCO behavior where Large objects are always visible unless explicitly hidden
-        }
-
-        /// <summary>
-        /// Build a map of which zones physically overlap/intersect each other.
-        /// This ensures that nested zones (e.g., a room inside a larger area) remain visible
-        /// even if the VisTable data doesn't explicitly link them.
-        /// </summary>
-        private void BuildOverlappingZoneMap()
-        {
-            overlappingZoneMap.Clear();
-            
-            if (zoneSections.Count == 0) return;
-
-            // O(N^2) check - fine for startup since N is usually small (<100)
-            for (int i = 0; i < zoneSections.Count; i++)
+            foreach (var kvp in objectUidDict)
             {
-                var sectionA = zoneSections[i];
-                if (sectionA == null || string.IsNullOrEmpty(sectionA.zoneName)) continue;
-
-                // Ensure list exists
-                if (!overlappingZoneMap.ContainsKey(sectionA.zoneName))
+                if (IsPotcoLargeRootObject(kvp.Value))
                 {
-                    overlappingZoneMap[sectionA.zoneName] = new List<string>();
-                }
-
-                Bounds boundsA = sectionA.zoneBounds;
-                // If bounds are zero/empty, try to get from collider
-                if (boundsA.size == Vector3.zero && sectionA.zoneCollider != null)
-                {
-                    boundsA = sectionA.zoneCollider.bounds;
-                }
-
-                for (int j = i + 1; j < zoneSections.Count; j++)
-                {
-                    var sectionB = zoneSections[j];
-                    if (sectionB == null || string.IsNullOrEmpty(sectionB.zoneName)) continue;
-
-                    Bounds boundsB = sectionB.zoneBounds;
-                    if (boundsB.size == Vector3.zero && sectionB.zoneCollider != null)
-                    {
-                        boundsB = sectionB.zoneCollider.bounds;
-                    }
-
-                    // Check intersection
-                    if (boundsA.Intersects(boundsB))
-                    {
-                        // Add bidirectional link
-                        overlappingZoneMap[sectionA.zoneName].Add(sectionB.zoneName);
-                        
-                        if (!overlappingZoneMap.ContainsKey(sectionB.zoneName))
-                        {
-                            overlappingZoneMap[sectionB.zoneName] = new List<string>();
-                        }
-                        overlappingZoneMap[sectionB.zoneName].Add(sectionA.zoneName);
-                        
-                        // Debug.Log($"[VisZoneManager] Overlap detected: {sectionA.zoneName} <-> {sectionB.zoneName}");
-                    }
+                    HideObject(kvp.Value);
                 }
             }
-            
-            Debug.Log($"[VisZoneManager] Built overlap map for {overlappingZoneMap.Count} zones");
+
+            foreach (var kvp in namedStaticDict)
+            {
+                if (!IsObjectInZoneSection(kvp.Value))
+                {
+                    HideObject(kvp.Value);
+                }
+            }
         }
 
         // Removed Start() - VisZoneSensor now detects the initial zone when player spawns
@@ -156,10 +106,13 @@ namespace POTCO.VisZones
             objectUidDict.Clear();
 
             // Find all ObjectListInfo components in the scene (they store object UIDs)
-            POTCO.ObjectListInfo[] allObjects = FindObjectsByType<POTCO.ObjectListInfo>(FindObjectsSortMode.None);
+            POTCO.ObjectListInfo[] allObjects = Resources.FindObjectsOfTypeAll<POTCO.ObjectListInfo>();
 
             foreach (var obj in allObjects)
             {
+                if (obj == null || !obj.gameObject.scene.IsValid())
+                    continue;
+
                 if (!string.IsNullOrEmpty(obj.objectId))
                 {
                     objectUidDict[obj.objectId] = obj.gameObject;
@@ -200,10 +153,14 @@ namespace POTCO.VisZones
             }
 
             // Step 2: Find GameObjects in scene whose names match the imported data
-            GameObject[] allObjects = FindObjectsByType<GameObject>(FindObjectsSortMode.None);
+            Transform[] allTransforms = Resources.FindObjectsOfTypeAll<Transform>();
 
-            foreach (var obj in allObjects)
+            foreach (Transform transform in allTransforms)
             {
+                if (transform == null || !transform.gameObject.scene.IsValid())
+                    continue;
+
+                GameObject obj = transform.gameObject;
                 string name = obj.name;
 
                 // Check if this GameObject's name is in the imported data
@@ -228,33 +185,205 @@ namespace POTCO.VisZones
             }
         }
 
+        private void EnsureZoneColliders()
+        {
+            foreach (VisZoneSection section in zoneSections)
+            {
+                if (section == null || string.IsNullOrEmpty(section.zoneName))
+                    continue;
+
+                Collider resolvedCollider = ResolveZoneCollider(section);
+                if (resolvedCollider == null)
+                {
+                    resolvedCollider = CreateRuntimeZoneCollider(section);
+                }
+
+                if (resolvedCollider != null)
+                {
+                    section.zoneCollider = resolvedCollider;
+                    VisZoneVolume volume = resolvedCollider.GetComponent<VisZoneVolume>();
+                    if (volume != null)
+                    {
+                        volume.zoneName = section.zoneName;
+                        volume.zoneCollider = resolvedCollider;
+                        volume.sectionRoot = section;
+                    }
+                }
+            }
+        }
+
+        private Collider ResolveZoneCollider(VisZoneSection section)
+        {
+            if (TryPrepareZoneCollider(section.zoneCollider, section.zoneName, section, out Collider preparedCollider))
+            {
+                return preparedCollider;
+            }
+
+            foreach (VisZoneVolume volume in Resources.FindObjectsOfTypeAll<VisZoneVolume>())
+            {
+                if (volume == null || !volume.gameObject.scene.IsValid())
+                    continue;
+
+                string volumeZoneName = !string.IsNullOrEmpty(volume.zoneName)
+                    ? volume.zoneName
+                    : ExtractZoneName(volume.gameObject.name);
+
+                if (volumeZoneName != section.zoneName)
+                    continue;
+
+                Collider candidate = volume.zoneCollider != null ? volume.zoneCollider : volume.GetComponent<Collider>();
+                if (TryPrepareZoneCollider(candidate, section.zoneName, section, out preparedCollider))
+                {
+                    return preparedCollider;
+                }
+            }
+
+            string expectedName = CollisionZonePrefix + section.zoneName;
+            foreach (Collider collider in Resources.FindObjectsOfTypeAll<Collider>())
+            {
+                if (collider == null || !collider.gameObject.scene.IsValid())
+                    continue;
+
+                if (collider.gameObject.name != expectedName)
+                    continue;
+
+                if (TryPrepareZoneCollider(collider, section.zoneName, section, out preparedCollider))
+                {
+                    return preparedCollider;
+                }
+            }
+
+            return null;
+        }
+
+        private bool TryPrepareZoneCollider(Collider collider, string zoneName, VisZoneSection section, out Collider preparedCollider)
+        {
+            preparedCollider = null;
+
+            if (collider == null || !collider.gameObject.scene.IsValid())
+                return false;
+
+            if (!collider.gameObject.activeInHierarchy)
+            {
+                if (!collider.gameObject.activeSelf && IsParentActiveInHierarchy(collider.transform.parent))
+                {
+                    collider.gameObject.SetActive(true);
+                }
+
+                if (!collider.gameObject.activeInHierarchy)
+                    return false;
+            }
+
+            collider.enabled = true;
+            collider.isTrigger = true;
+
+            VisZoneVolume volume = collider.GetComponent<VisZoneVolume>();
+            if (volume == null)
+            {
+                volume = collider.gameObject.AddComponent<VisZoneVolume>();
+            }
+
+            volume.zoneName = zoneName;
+            volume.zoneCollider = collider;
+            volume.sectionRoot = section;
+
+            preparedCollider = collider;
+            return true;
+        }
+
+        private Collider CreateRuntimeZoneCollider(VisZoneSection section)
+        {
+            Bounds bounds = section.GetDetectionBounds();
+            if (bounds.size == Vector3.zero)
+            {
+                Debug.LogWarning($"[VisZoneManager] Cannot create runtime collision zone for '{section.zoneName}': no section bounds are available.");
+                return null;
+            }
+
+            GameObject zoneObject = new GameObject(CollisionZonePrefix + section.zoneName);
+            zoneObject.transform.SetParent(GetRuntimeColliderRoot(), false);
+            zoneObject.transform.position = bounds.center;
+
+            BoxCollider collider = zoneObject.AddComponent<BoxCollider>();
+            collider.isTrigger = true;
+            collider.enabled = true;
+            collider.center = Vector3.zero;
+            collider.size = new Vector3(
+                Mathf.Max(bounds.size.x, 0.1f),
+                Mathf.Max(bounds.size.y, RuntimeZoneColliderHeight),
+                Mathf.Max(bounds.size.z, 0.1f));
+
+            VisZoneVolume volume = zoneObject.AddComponent<VisZoneVolume>();
+            volume.zoneName = section.zoneName;
+            volume.zoneCollider = collider;
+            volume.sectionRoot = section;
+
+            Debug.LogWarning($"[VisZoneManager] Created runtime fallback {zoneObject.name} from Section-{section.zoneName} bounds.");
+            return collider;
+        }
+
+        private Transform GetRuntimeColliderRoot()
+        {
+            if (runtimeColliderRoot != null)
+                return runtimeColliderRoot;
+
+            Transform existing = transform.Find(RuntimeColliderRootName);
+            if (existing != null)
+            {
+                runtimeColliderRoot = existing;
+                return runtimeColliderRoot;
+            }
+
+            GameObject root = new GameObject(RuntimeColliderRootName);
+            root.transform.SetParent(transform, false);
+            runtimeColliderRoot = root.transform;
+            return runtimeColliderRoot;
+        }
+
+        private bool IsParentActiveInHierarchy(Transform parent)
+        {
+            return parent == null || parent.gameObject.activeInHierarchy;
+        }
+
+        private string ExtractZoneName(string objectName)
+        {
+            return objectName.StartsWith(CollisionZonePrefix)
+                ? objectName.Substring(CollisionZonePrefix.Length)
+                : objectName;
+        }
+
         /// <summary>
         /// Set the current zone (called by VisZoneSensor when player enters a zone)
         /// </summary>
         public void SetCurrentZone(string zoneName)
         {
+            if (visZoneData == null || string.IsNullOrEmpty(zoneName) || !visZoneData.HasZone(zoneName))
+            {
+                return;
+            }
+
             if (currentZone == zoneName)
                 return; // Already in this zone
 
             currentZone = zoneName;
-            UpdateVisibility();
+            UpdateVisibilityForZone(currentZone);
         }
 
         /// <summary>
-        /// Set all zones player is currently inside (handles overlapping zones)
-        /// When in multiple zones, props are NOT hidden if ANY zone wants them visible
+        /// Backwards-compatible wrapper. POTCO uses one current VisZone, not a union of overlaps.
         /// </summary>
         public void SetCurrentZones(List<string> zoneNames)
         {
             currentPlayerZones = new List<string>(zoneNames);
 
-            // Set primary zone as first in list
-            if (zoneNames.Count > 0)
+            foreach (string zoneName in zoneNames)
             {
-                currentZone = zoneNames[0];
+                if (visZoneData != null && visZoneData.HasZone(zoneName))
+                {
+                    SetCurrentZone(zoneName);
+                    return;
+                }
             }
-
-            UpdateVisibilityForMultipleZones();
         }
 
         /// <summary>
@@ -275,20 +404,14 @@ namespace POTCO.VisZones
                 return;
             }
 
+            if (!visZoneData.HasZone(zoneName))
+            {
+                Debug.LogWarning($"[VisZoneManager] Cannot update visibility: zone '{zoneName}' is not in the Vis Table");
+                return;
+            }
+
             // Get complete visibility set for zone
             VisZoneData.VisibilitySet visSet = visZoneData.GetCompleteVisibilitySet(zoneName);
-
-            // Add physically overlapping zones (Nested/Intersecting zones)
-            if (overlappingZoneMap.TryGetValue(zoneName, out List<string> overlaps))
-            {
-                foreach (string overlapZone in overlaps)
-                {
-                    if (!visSet.zones.Contains(overlapZone))
-                    {
-                        visSet.zones.Add(overlapZone);
-                    }
-                }
-            }
 
             int zonesShown = 0, zonesHidden = 0;
             int uidsShown = 0, uidsHidden = 0;
@@ -350,7 +473,7 @@ namespace POTCO.VisZones
             {
                 if (objectUidDict.TryGetValue(uid, out GameObject obj))
                 {
-                    if (!IsObjectVisible(obj))
+                    if (IsPotcoLargeRootObject(obj) && !IsObjectVisible(obj))
                     {
                         ShowObject(obj);
                         uidsShown++;
@@ -369,17 +492,7 @@ namespace POTCO.VisZones
                 if (visSet.objectUIDs.Contains(uid))
                     continue;
 
-                // Check if this is actually a Large object
-                POTCO.ObjectListInfo objInfo = obj.GetComponent<POTCO.ObjectListInfo>();
-                if (objInfo == null || objInfo.visSize != "Large")
-                    continue; // Not a Large object, skip
-
-                // Check if this object is inside a zone section (should not be for Large objects)
-                bool inZoneSection = IsObjectInZoneSection(obj);
-
-                // Only hide Large objects (those NOT in zone sections)
-                // Normal objects inside sections are controlled by section visibility
-                if (!inZoneSection && IsObjectVisible(obj))
+                if (IsPotcoLargeRootObject(obj) && IsObjectVisible(obj))
                 {
                     HideObject(obj);
                     uidsHidden++;
@@ -401,7 +514,7 @@ namespace POTCO.VisZones
                         originalStaticStates[obj] = IsObjectVisible(obj);
                     }
 
-                    if (!IsObjectVisible(obj))
+                    if (!IsObjectInZoneSection(obj) && !IsObjectVisible(obj))
                     {
                         ShowObject(obj);
                         staticsShown++;
@@ -432,11 +545,7 @@ namespace POTCO.VisZones
                 }
             }
 
-            // Update current state (for runtime use)
-            if (zoneName == currentZone)
-            {
-                currentlyVisibleZones = visSet.zones;
-            }
+            currentlyVisibleZones = new List<string>(visSet.zones);
 
             // Log when something actually changed
             if (zonesShown > 0 || zonesHidden > 0 || uidsShown > 0 || uidsHidden > 0 || staticsShown > 0 || staticsHidden > 0)
@@ -504,8 +613,7 @@ namespace POTCO.VisZones
         }
 
         /// <summary>
-        /// Update visibility when player is in multiple zones
-        /// Combines visibility from all zones - if ANY zone wants something visible, keep it visible
+        /// Update visibility from the first valid candidate. Kept for older editor/runtime callers.
         /// </summary>
         private void UpdateVisibilityForMultipleZones()
         {
@@ -515,165 +623,14 @@ namespace POTCO.VisZones
                 return;
             }
 
-            // If only in one zone, use standard logic
-            if (currentPlayerZones.Count == 1)
-            {
-                UpdateVisibilityForZone(currentPlayerZones[0]);
-                return;
-            }
-
-            // In multiple zones - combine visibility sets from all zones
-            Debug.Log($"[VisZoneManager] Player in {currentPlayerZones.Count} zones: {string.Join(", ", currentPlayerZones)} - combining visibility");
-
-            HashSet<string> combinedZones = new HashSet<string>();
-            HashSet<string> combinedUIDs = new HashSet<string>();
-            HashSet<string> combinedStatics = new HashSet<string>();
-
-            // Collect visibility from ALL zones player is in (union)
             foreach (string zoneName in currentPlayerZones)
             {
-                // 1. Get standard logical visibility (VisTable)
-                VisZoneData.VisibilitySet visSet = visZoneData.GetCompleteVisibilitySet(zoneName);
-
-                foreach (string zone in visSet.zones)
-                    combinedZones.Add(zone);
-
-                foreach (string uid in visSet.objectUIDs)
-                    combinedUIDs.Add(uid);
-
-                foreach (string staticName in visSet.namedStatics)
-                    combinedStatics.Add(staticName);
-                    
-                // 2. Add physically overlapping zones (Nested/Intersecting zones)
-                // This ensures that if Zone B is inside Zone A, being in Zone A allows seeing Zone B
-                if (overlappingZoneMap.TryGetValue(zoneName, out List<string> overlaps))
+                if (visZoneData.HasZone(zoneName))
                 {
-                    foreach (string overlapZone in overlaps)
-                    {
-                        combinedZones.Add(overlapZone);
-                    }
+                    SetCurrentZone(zoneName);
+                    return;
                 }
             }
-
-            int zonesShown = 0, zonesHidden = 0;
-            int uidsShown = 0, uidsHidden = 0;
-            int staticsShown = 0, staticsHidden = 0;
-
-            // ============================================================
-            // PART 1: Show/Hide Zone Sections (combined from all zones)
-            // ============================================================
-
-            // Show zones that ANY zone wants visible
-            foreach (string zone in combinedZones)
-            {
-                if (zoneSectionDict.TryGetValue(zone, out VisZoneSection section))
-                {
-                    if (!section.IsVisible)
-                    {
-                        section.Show();
-                        zonesShown++;
-                    }
-                }
-            }
-
-            // Hide zones that NO zone wants visible
-            foreach (var kvp in zoneSectionDict)
-            {
-                if (!combinedZones.Contains(kvp.Key))
-                {
-                    if (kvp.Value.IsVisible)
-                    {
-                        kvp.Value.Hide();
-                        zonesHidden++;
-                    }
-                }
-            }
-
-            // ============================================================
-            // PART 2: Show/Hide Object UIDs (combined from all zones)
-            // Large objects: show if ANY zone wants them visible
-            // ============================================================
-
-            // Show objects whose UIDs are in ANY active zone
-            foreach (string uid in combinedUIDs)
-            {
-                if (objectUidDict.TryGetValue(uid, out GameObject obj))
-                {
-                    if (!IsObjectVisible(obj))
-                    {
-                        ShowObject(obj);
-                        uidsShown++;
-                    }
-                }
-            }
-
-            // Hide objects whose UIDs are NOT in ANY active zone
-            foreach (var kvp in objectUidDict)
-            {
-                string uid = kvp.Key;
-                GameObject obj = kvp.Value;
-
-                // Skip if ANY zone wants this UID visible
-                if (combinedUIDs.Contains(uid))
-                    continue;
-
-                // Check if this is actually a Large object
-                POTCO.ObjectListInfo objInfo = obj.GetComponent<POTCO.ObjectListInfo>();
-                if (objInfo == null || objInfo.visSize != "Large")
-                    continue; // Not a Large object, skip
-
-                // Check if this object is inside a zone section
-                bool inZoneSection = IsObjectInZoneSection(obj);
-
-                // Only hide Large objects (those NOT in zone sections)
-                if (!inZoneSection && IsObjectVisible(obj))
-                {
-                    HideObject(obj);
-                    uidsHidden++;
-                }
-            }
-
-            // ============================================================
-            // PART 3: Show/Hide Named Statics (combined from all zones)
-            // ============================================================
-
-            // Show statics that ANY zone wants visible
-            foreach (string staticName in combinedStatics)
-            {
-                if (namedStaticDict.TryGetValue(staticName, out GameObject obj))
-                {
-                    if (!IsObjectVisible(obj))
-                    {
-                        ShowObject(obj);
-                        staticsShown++;
-                    }
-                }
-            }
-
-            // Hide statics that NO zone wants visible
-            foreach (var kvp in namedStaticDict)
-            {
-                if (!combinedStatics.Contains(kvp.Key))
-                {
-                    bool inZoneSection = IsObjectInZoneSection(kvp.Value);
-
-                    if (!inZoneSection && IsObjectVisible(kvp.Value))
-                    {
-                        HideObject(kvp.Value);
-                        staticsHidden++;
-                    }
-                }
-            }
-
-            // Update current state
-            currentlyVisibleZones = new List<string>(combinedZones);
-
-            // Log results
-            Debug.Log($"[VisZoneManager] Multi-zone visibility update:\n" +
-                     $"  Combined from {currentPlayerZones.Count} zones\n" +
-                     $"  Zones: +{zonesShown} -{zonesHidden} ({combinedZones.Count} total visible)\n" +
-                     $"  UIDs:  +{uidsShown} -{uidsHidden} ({combinedUIDs.Count} total)\n" +
-                     $"  Statics: +{staticsShown} -{staticsHidden} ({combinedStatics.Count} total)");
         }
 
         /// <summary>
@@ -741,6 +698,20 @@ namespace POTCO.VisZones
                     renderer.enabled = false;
                 }
             }
+
+            Collider[] colliders = obj.GetComponentsInChildren<Collider>(true);
+            foreach (Collider collider in colliders)
+            {
+                if (collider != null && !ShouldKeepColliderEnabled(collider))
+                {
+                    if (!objectColliderStates.ContainsKey(collider))
+                    {
+                        objectColliderStates[collider] = collider.enabled;
+                    }
+
+                    collider.enabled = false;
+                }
+            }
         }
 
         /// <summary>
@@ -767,6 +738,22 @@ namespace POTCO.VisZones
                     }
                 }
             }
+
+            Collider[] colliders = obj.GetComponentsInChildren<Collider>(true);
+            foreach (Collider collider in colliders)
+            {
+                if (collider != null && !ShouldKeepColliderEnabled(collider))
+                {
+                    if (objectColliderStates.TryGetValue(collider, out bool originalState))
+                    {
+                        collider.enabled = originalState;
+                    }
+                    else
+                    {
+                        collider.enabled = true;
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -783,6 +770,18 @@ namespace POTCO.VisZones
                 }
             }
             return false;
+        }
+
+        private bool IsPotcoLargeRootObject(GameObject obj)
+        {
+            POTCO.ObjectListInfo objInfo = obj.GetComponent<POTCO.ObjectListInfo>();
+            return objInfo != null && objInfo.visSize == "Large" && !IsObjectInZoneSection(obj);
+        }
+
+        private bool ShouldKeepColliderEnabled(Collider collider)
+        {
+            return collider.GetComponent<VisZoneVolume>() != null ||
+                   collider.gameObject.name.StartsWith("collision_zone_");
         }
 
         /// <summary>
@@ -804,6 +803,7 @@ namespace POTCO.VisZones
             zoneSections.Clear();
             zoneSections.AddRange(GetComponentsInChildren<VisZoneSection>(true));
             BuildSectionDictionary();
+            EnsureZoneColliders();
             Debug.Log($"[VisZoneManager] Refreshed {zoneSections.Count} zone sections");
         }
 
@@ -816,6 +816,10 @@ namespace POTCO.VisZones
             {
                 BuildSectionDictionary();
             }
+            if (NeedsZoneColliderRefresh())
+            {
+                EnsureZoneColliders();
+            }
             if (objectUidDict.Count == 0)
             {
                 BuildObjectUidDictionary();
@@ -824,6 +828,25 @@ namespace POTCO.VisZones
             {
                 BuildNamedStaticDictionary();
             }
+        }
+
+        private bool NeedsZoneColliderRefresh()
+        {
+            foreach (VisZoneSection section in zoneSections)
+            {
+                if (section == null || string.IsNullOrEmpty(section.zoneName))
+                    continue;
+
+                if (section.zoneCollider == null ||
+                    !section.zoneCollider.enabled ||
+                    !section.zoneCollider.isTrigger ||
+                    !section.zoneCollider.gameObject.activeInHierarchy)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void OnDrawGizmosSelected()

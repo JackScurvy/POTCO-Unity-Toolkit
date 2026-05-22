@@ -2,10 +2,12 @@ using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
 using System.IO;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using WorldDataImporter.Data;
 using POTCO.VisZones;
 using POTCO.Editor;
+using ObjectListInfo = POTCO.ObjectListInfo;
 
 namespace WorldDataImporter.Processors
 {
@@ -43,6 +45,9 @@ namespace WorldDataImporter.Processors
             Dictionary<string, Transform> collisionZones = FindCollisionZones(root);
             DebugLogger.LogWorldImporter($"🔍 Found {collisionZones.Count} collision zones in scene");
 
+            Dictionary<string, CollisionZoneMeshData> sourceFootprints = BuildSourceCollisionZoneFootprints(root);
+            ApplySourceCollisionZoneFootprints(root, collisionZones, sourceFootprints, visTable);
+
             // Step 2.5: Discover prop-linked zones from object data and create collision zones for them
             Dictionary<string, string> propLinkedZones = DiscoverPropLinkedZones(objectDataMap, root, collisionZones, visTable);
             if (propLinkedZones.Count > 0)
@@ -67,6 +72,42 @@ namespace WorldDataImporter.Processors
             SetupVisZoneComponents(root, visTable, sections);
 
             DebugLogger.LogWorldImporter("✅ VisZone processing complete!");
+        }
+
+        public static int RebuildSourceCollisionZoneFootprints(GameObject root)
+        {
+            if (root == null)
+            {
+                DebugLogger.LogWorldImporter("VisZone source footprint rebuild skipped: root is null");
+                return 0;
+            }
+
+            VisZoneManager manager = root.GetComponent<VisZoneManager>() ?? root.GetComponentInChildren<VisZoneManager>(true);
+            if (manager == null || manager.visZoneData == null)
+            {
+                DebugLogger.LogWorldImporter($"VisZone source footprint rebuild skipped for '{root.name}': no VisZoneManager/VisZoneData found");
+                return 0;
+            }
+
+            Dictionary<string, VisZoneEntry> visTable = new Dictionary<string, VisZoneEntry>();
+            foreach (VisZoneEntry entry in manager.visZoneData.visTable)
+            {
+                if (entry != null && !string.IsNullOrEmpty(entry.zoneName))
+                    visTable[entry.zoneName] = entry;
+            }
+
+            Dictionary<string, Transform> collisionZones = FindCollisionZones(root);
+            Dictionary<string, CollisionZoneMeshData> sourceFootprints = BuildSourceCollisionZoneFootprints(root);
+            int applied = ApplySourceCollisionZoneFootprints(root, collisionZones, sourceFootprints, visTable);
+
+            if (applied > 0)
+            {
+                CreateZoneTriggers(collisionZones);
+                LinkCollidersToSections(collisionZones, FindExistingSections(root));
+                EditorUtility.SetDirty(root);
+            }
+
+            return applied;
         }
 
         /// <summary>
@@ -200,6 +241,287 @@ namespace WorldDataImporter.Processors
             return collisionZones;
         }
 
+        private class CollisionZoneMeshData
+        {
+            public readonly List<Vector3> vertices = new List<Vector3>();
+            public readonly List<int> triangles = new List<int>();
+        }
+
+        private static Dictionary<string, CollisionZoneMeshData> BuildSourceCollisionZoneFootprints(GameObject root)
+        {
+            string modelPath = GetRootModelPath(root);
+            if (string.IsNullOrEmpty(modelPath))
+            {
+                return new Dictionary<string, CollisionZoneMeshData>();
+            }
+
+            string eggPath = ResolveEggAssetPath(modelPath);
+            if (string.IsNullOrEmpty(eggPath))
+            {
+                return new Dictionary<string, CollisionZoneMeshData>();
+            }
+
+            Dictionary<string, CollisionZoneMeshData> meshes = ParseCollisionZoneMeshes(eggPath);
+            if (meshes.Count > 0)
+            {
+                DebugLogger.LogWorldImporter($"  Source collision footprints: {meshes.Count} zones from {Path.GetFileName(eggPath)}");
+            }
+
+            return meshes;
+        }
+
+        private static string GetRootModelPath(GameObject root)
+        {
+            ObjectListInfo rootInfo = root.GetComponent<ObjectListInfo>();
+            if (rootInfo != null && !string.IsNullOrEmpty(rootInfo.modelPath))
+            {
+                return rootInfo.modelPath;
+            }
+
+            foreach (ObjectListInfo info in root.GetComponentsInChildren<ObjectListInfo>(true))
+            {
+                if (info != null && !string.IsNullOrEmpty(info.modelPath) && info.modelPath.Contains("models/islands/"))
+                {
+                    return info.modelPath;
+                }
+            }
+
+            return null;
+        }
+
+        private static string ResolveEggAssetPath(string modelPath)
+        {
+            foreach (string phase in Directory.GetDirectories("Assets/Resources", "phase_*", SearchOption.AllDirectories))
+            {
+                string attemptPath = Path.Combine(phase, modelPath + ".egg").Replace("\\", "/");
+                if (File.Exists(attemptPath))
+                {
+                    return attemptPath;
+                }
+            }
+
+            return null;
+        }
+
+        private static int ApplySourceCollisionZoneFootprints(
+            GameObject root,
+            Dictionary<string, Transform> collisionZones,
+            Dictionary<string, CollisionZoneMeshData> sourceFootprints,
+            Dictionary<string, VisZoneEntry> visTable)
+        {
+            if (sourceFootprints == null || sourceFootprints.Count == 0)
+                return 0;
+
+            Transform sourceRoot = null;
+            int applied = 0;
+
+            foreach (var kvp in sourceFootprints)
+            {
+                string zoneName = kvp.Key;
+                CollisionZoneMeshData meshData = kvp.Value;
+
+                if (!visTable.ContainsKey(zoneName) || meshData.vertices.Count < 3 || meshData.triangles.Count < 3)
+                    continue;
+
+                if (!collisionZones.TryGetValue(zoneName, out Transform collisionTransform) || collisionTransform == null)
+                {
+                    if (sourceRoot == null)
+                    {
+                        sourceRoot = GetOrCreateSourceCollisionRoot(root);
+                    }
+
+                    GameObject collisionObject = new GameObject($"collision_zone_{zoneName}");
+                    Undo.RegisterCreatedObjectUndo(collisionObject, "Create source VisZone collider");
+                    collisionObject.transform.SetParent(sourceRoot, false);
+                    collisionTransform = collisionObject.transform;
+                    collisionZones[zoneName] = collisionTransform;
+                }
+
+                ConfigureSourceCollisionZone(collisionTransform, zoneName, meshData);
+                applied++;
+            }
+
+            if (applied > 0)
+            {
+                DebugLogger.LogWorldImporter($"  Applied source mesh footprints to {applied} VisZone collision zones");
+            }
+
+            return applied;
+        }
+
+        private static Dictionary<string, GameObject> FindExistingSections(GameObject root)
+        {
+            Dictionary<string, GameObject> sections = new Dictionary<string, GameObject>();
+            foreach (VisZoneSection section in root.GetComponentsInChildren<VisZoneSection>(true))
+            {
+                if (section != null && !string.IsNullOrEmpty(section.zoneName))
+                    sections[section.zoneName] = section.gameObject;
+            }
+
+            return sections;
+        }
+
+        private static Transform GetOrCreateSourceCollisionRoot(GameObject root)
+        {
+            Transform existing = root.transform.Find("VisZone_SourceColliders");
+            if (existing != null)
+            {
+                return existing;
+            }
+
+            GameObject sourceRoot = new GameObject("VisZone_SourceColliders");
+            Undo.RegisterCreatedObjectUndo(sourceRoot, "Create source VisZone collider root");
+            sourceRoot.transform.SetParent(root.transform, false);
+            return sourceRoot.transform;
+        }
+
+        private static void ConfigureSourceCollisionZone(Transform collisionTransform, string zoneName, CollisionZoneMeshData meshData)
+        {
+            Undo.RecordObject(collisionTransform, "Configure source VisZone collider");
+
+            Bounds bounds = CalculateBoundsFromVertices(meshData.vertices);
+            collisionTransform.localPosition = bounds.center;
+            collisionTransform.localRotation = Quaternion.identity;
+            collisionTransform.localScale = Vector3.one;
+
+            Vector3[] localVertices = new Vector3[meshData.vertices.Count];
+            for (int i = 0; i < meshData.vertices.Count; i++)
+            {
+                localVertices[i] = meshData.vertices[i] - bounds.center;
+            }
+
+            BoxCollider boxCollider = collisionTransform.GetComponent<BoxCollider>();
+            if (boxCollider == null)
+            {
+                boxCollider = Undo.AddComponent<BoxCollider>(collisionTransform.gameObject);
+            }
+            else
+            {
+                Undo.RecordObject(boxCollider, "Configure source VisZone collider");
+            }
+
+            boxCollider.isTrigger = true;
+            boxCollider.center = Vector3.zero;
+            boxCollider.size = new Vector3(
+                Mathf.Max(bounds.size.x, 0.1f),
+                Mathf.Max(bounds.size.y, 0.1f),
+                Mathf.Max(bounds.size.z, 0.1f));
+
+            VisZoneVolume volume = collisionTransform.GetComponent<VisZoneVolume>();
+            if (volume == null)
+            {
+                volume = Undo.AddComponent<VisZoneVolume>(collisionTransform.gameObject);
+            }
+            else
+            {
+                Undo.RecordObject(volume, "Configure source VisZone volume");
+            }
+
+            volume.zoneName = zoneName;
+            volume.zoneCollider = boxCollider;
+            volume.SetSourceFootprint(localVertices, meshData.triangles.ToArray());
+
+            EditorUtility.SetDirty(collisionTransform.gameObject);
+        }
+
+        private static Bounds CalculateBoundsFromVertices(List<Vector3> vertices)
+        {
+            Bounds bounds = new Bounds(vertices[0], Vector3.zero);
+            for (int i = 1; i < vertices.Count; i++)
+            {
+                bounds.Encapsulate(vertices[i]);
+            }
+
+            return bounds;
+        }
+
+        private static Dictionary<string, CollisionZoneMeshData> ParseCollisionZoneMeshes(string eggPath)
+        {
+            string[] lines = File.ReadAllLines(eggPath);
+            Dictionary<string, CollisionZoneMeshData> result = new Dictionary<string, CollisionZoneMeshData>();
+            Regex groupRegex = new Regex(@"<Group>\s+collision_zone_([^\s{]+)\s*\{");
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                Match groupMatch = groupRegex.Match(lines[i]);
+                if (!groupMatch.Success)
+                    continue;
+
+                string zoneName = groupMatch.Groups[1].Value;
+                CollisionZoneMeshData meshData = new CollisionZoneMeshData();
+                int depth = CountChar(lines[i], '{') - CountChar(lines[i], '}');
+
+                for (i++; i < lines.Length && depth > 0; i++)
+                {
+                    string line = lines[i].Trim();
+
+                    if (line.StartsWith("<Vertex>") && i + 1 < lines.Length)
+                    {
+                        if (TryParseEggVertex(lines[i + 1], out Vector3 vertex))
+                        {
+                            meshData.vertices.Add(vertex);
+                        }
+                    }
+                    else if (line.StartsWith("<VertexRef>"))
+                    {
+                        AddVertexRefTriangles(line, meshData.triangles);
+                    }
+
+                    depth += CountChar(lines[i], '{') - CountChar(lines[i], '}');
+                }
+
+                i--;
+
+                if (meshData.vertices.Count >= 3 && meshData.triangles.Count >= 3)
+                {
+                    result[zoneName] = meshData;
+                }
+            }
+
+            return result;
+        }
+
+        private static bool TryParseEggVertex(string line, out Vector3 vertex)
+        {
+            vertex = Vector3.zero;
+            MatchCollection matches = Regex.Matches(line, @"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?");
+            if (matches.Count < 3)
+                return false;
+
+            float x = float.Parse(matches[0].Value, CultureInfo.InvariantCulture);
+            float y = float.Parse(matches[1].Value, CultureInfo.InvariantCulture);
+            float z = float.Parse(matches[2].Value, CultureInfo.InvariantCulture);
+
+            vertex = new Vector3(x, z, y);
+            return true;
+        }
+
+        private static void AddVertexRefTriangles(string line, List<int> triangles)
+        {
+            int openBrace = line.IndexOf('{');
+            int refIndex = line.IndexOf("<Ref>", System.StringComparison.Ordinal);
+            if (openBrace < 0 || refIndex <= openBrace)
+                return;
+
+            string indexText = line.Substring(openBrace + 1, refIndex - openBrace - 1);
+            MatchCollection matches = Regex.Matches(indexText, @"\d+");
+            if (matches.Count < 3)
+                return;
+
+            List<int> polygon = new List<int>();
+            foreach (Match match in matches)
+            {
+                polygon.Add(int.Parse(match.Value, CultureInfo.InvariantCulture));
+            }
+
+            for (int i = 1; i < polygon.Count - 1; i++)
+            {
+                triangles.Add(polygon[0]);
+                triangles.Add(polygon[i]);
+                triangles.Add(polygon[i + 1]);
+            }
+        }
+
         /// <summary>
         /// Discover prop-linked zones (format: "zoneName_propId") and create collision zones for them
         /// Prop-linked zones are parented to specific props and move with them
@@ -277,16 +599,6 @@ namespace WorldDataImporter.Processors
 
                 // Add to collision zones dictionary
                 collisionZones[zoneName] = collisionZoneObj.transform;
-
-                // Add to vis table (empty entry, will be configured manually)
-                VisZoneEntry newEntry = new VisZoneEntry
-                {
-                    zoneName = zoneName,
-                    visibleZones = new List<string>(),
-                    objectUids = new List<string>(),
-                    fortVisZones = new List<string>()
-                };
-                visTable[zoneName] = newEntry;
 
                 propLinkedZones[zoneName] = propId;
                 discoveredZones.Add(zoneName);

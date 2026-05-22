@@ -24,9 +24,11 @@ namespace POTCO.VisZones
 
         // Cache renderers on first hide/show to avoid repeated GetComponentsInChildren calls
         private Renderer[] cachedRenderers;
+        private Collider[] cachedColliders;
 
         // Store original renderer states to preserve character clothing, colliders, etc.
         private System.Collections.Generic.Dictionary<Renderer, bool> originalRendererStates;
+        private System.Collections.Generic.Dictionary<Collider, bool> originalColliderStates;
 
         /// <summary>
         /// Show this section (restore renderers to original state, collisions stay active)
@@ -64,6 +66,26 @@ namespace POTCO.VisZones
                     }
                 }
 
+                if (cachedColliders == null)
+                {
+                    cachedColliders = GetComponentsInChildren<Collider>(true);
+                }
+
+                foreach (Collider collider in cachedColliders)
+                {
+                    if (collider != null && !ShouldKeepColliderEnabled(collider))
+                    {
+                        if (originalColliderStates != null && originalColliderStates.TryGetValue(collider, out bool originalState))
+                        {
+                            collider.enabled = originalState;
+                        }
+                        else
+                        {
+                            collider.enabled = true;
+                        }
+                    }
+                }
+
                 isVisible = true;
             }
         }
@@ -88,6 +110,16 @@ namespace POTCO.VisZones
                     originalRendererStates = new System.Collections.Generic.Dictionary<Renderer, bool>();
                 }
 
+                if (cachedColliders == null)
+                {
+                    cachedColliders = GetComponentsInChildren<Collider>(true);
+                }
+
+                if (originalColliderStates == null)
+                {
+                    originalColliderStates = new System.Collections.Generic.Dictionary<Collider, bool>();
+                }
+
                 foreach (Renderer renderer in cachedRenderers)
                 {
                     if (renderer != null)
@@ -108,6 +140,19 @@ namespace POTCO.VisZones
                     }
                 }
 
+                foreach (Collider collider in cachedColliders)
+                {
+                    if (collider != null && !ShouldKeepColliderEnabled(collider))
+                    {
+                        if (!originalColliderStates.ContainsKey(collider))
+                        {
+                            originalColliderStates[collider] = collider.enabled;
+                        }
+
+                        collider.enabled = false;
+                    }
+                }
+
                 isVisible = false;
             }
         }
@@ -116,5 +161,42 @@ namespace POTCO.VisZones
         /// Check if this section is currently visible
         /// </summary>
         public bool IsVisible => isVisible;
+
+        public Bounds GetDetectionBounds()
+        {
+            bool hasBounds = zoneBounds.size != Vector3.zero;
+            Bounds bounds = zoneBounds;
+
+            Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
+            foreach (Renderer renderer in renderers)
+            {
+                if (renderer == null)
+                    continue;
+
+                if (!hasBounds)
+                {
+                    bounds = renderer.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(renderer.bounds);
+                }
+            }
+
+            if (!hasBounds && zoneCollider != null)
+            {
+                bounds = zoneCollider.bounds;
+                hasBounds = true;
+            }
+
+            return hasBounds ? bounds : new Bounds(transform.position, Vector3.zero);
+        }
+
+        private bool ShouldKeepColliderEnabled(Collider collider)
+        {
+            return collider.GetComponent<VisZoneVolume>() != null ||
+                   collider.gameObject.name.StartsWith("collision_zone_");
+        }
     }
 }
