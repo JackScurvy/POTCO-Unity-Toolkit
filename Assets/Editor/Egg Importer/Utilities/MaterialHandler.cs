@@ -18,6 +18,15 @@ public class MaterialHandler
     private static readonly int ColorPropertyId = Shader.PropertyToID("_Color");
     private static readonly int MetallicPropertyId = Shader.PropertyToID("_Metallic");
     private static readonly int GlossinessPropertyId = Shader.PropertyToID("_Glossiness");
+    private static readonly int UseAlphaTexPropertyId = Shader.PropertyToID("_UseAlphaTex");
+    private static readonly int UseAlphaTestPropertyId = Shader.PropertyToID("_UseAlphaTest");
+    private static readonly int CutoffPropertyId = Shader.PropertyToID("_Cutoff");
+    private static readonly int CullPropertyId = Shader.PropertyToID("_Cull");
+    private static readonly int ZWritePropertyId = Shader.PropertyToID("_ZWrite");
+    private static readonly int SrcBlendPropertyId = Shader.PropertyToID("_SrcBlend");
+    private static readonly int DstBlendPropertyId = Shader.PropertyToID("_DstBlend");
+    private static readonly int AlphaPropertyId = Shader.PropertyToID("_Alpha");
+    private static readonly int AlphaChannelPropertyId = Shader.PropertyToID("_AlphaChannel");
     
     // Cache for default colors to avoid repeated string operations
     private static readonly Dictionary<string, Color> DefaultColorCache = new Dictionary<string, Color>();
@@ -54,9 +63,7 @@ public class MaterialHandler
             string materialName = kvp.Key;
             string texturePath = kvp.Value;
 
-            // Check for alpha blend marker
-            bool needsAlphaBlend = materialName.EndsWith("_ALPHABLEND");
-            string cleanMatName = needsAlphaBlend ? materialName.Substring(0, materialName.Length - 11) : materialName;
+            EggMaterialState materialState = DecodeOrResolveMaterialState(materialName, textureWrapModes, out string cleanMatName);
 
             DebugLogger.LogEggImporter($"Creating material: {cleanMatName} with texture: {texturePath}");
 
@@ -106,7 +113,7 @@ public class MaterialHandler
             }
             else
             {
-                mat = CreateVertexColorMaterial(materialName, needsAlphaBlend);
+                mat = CreateVertexColorMaterial(materialName, materialState);
             }
 
             if (colorTex)
@@ -124,29 +131,11 @@ public class MaterialHandler
             if (alphaTex)
             {
                 mat.SetTexture("_AlphaTex", alphaTex);
-                if (mat.HasProperty("_Cutoff")) mat.SetFloat("_Cutoff", 0.1f);
-                // Set culling to off so both sides are visible for alpha-masked materials
-                mat.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
-                mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
-                DebugLogger.LogEggImporter($"[AlphaMask] Assigned alpha texture to {cleanMatName}: {alphaTex.name} (Cull: Off)");
+                SetAlphaChannel(mat, wrapData.alphaFileChannel);
+                DebugLogger.LogEggImporter($"[AlphaMask] Assigned alpha texture to {cleanMatName}: {alphaTex.name}");
             }
-            else
-            {
-                // For ParticleGUI, default cull is Off (0), but for standard meshes default is Back (2)
-                // Only set Back culling if NOT using ParticleGUI (as GUI often needs double-sided or explicit control)
-                // Actually, particles usually need Cull Off.
-                if (!useParticleGUI)
-                {
-                    mat.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Back);
-                    mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Geometry;
-                    DebugLogger.LogEggImporter($"[Standard] Material {cleanMatName} set to back-face culling (Cull: Back)");
-                }
-                else
-                {
-                    // Ensure ParticleGUI materials render in transparent queue
-                    mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
-                }
-            }
+
+            ConfigureMaterialRenderState(mat, materialState, alphaTex != null, useParticleGUI);
 
             // Use cached property IDs for better performance (only for standard shaders)
             if (!useParticleGUI)
@@ -220,10 +209,15 @@ public class MaterialHandler
     public void CreateMultiTextureMaterials(List<Material> materials, List<string> materialNames, Dictionary<string, string> texturePaths, Dictionary<string, string> textureUVNames)
     {
         var textureWrapModes = new Dictionary<string, TextureWrapData>();
-        CreateMultiTextureMaterials(materials, materialNames, texturePaths, textureUVNames, textureWrapModes);
+        CreateMultiTextureMaterials(materials, materialNames, texturePaths, new Dictionary<string, string>(), textureUVNames, textureWrapModes);
     }
 
     public void CreateMultiTextureMaterials(List<Material> materials, List<string> materialNames, Dictionary<string, string> texturePaths, Dictionary<string, string> textureUVNames, Dictionary<string, TextureWrapData> textureWrapModes)
+    {
+        CreateMultiTextureMaterials(materials, materialNames, texturePaths, new Dictionary<string, string>(), textureUVNames, textureWrapModes);
+    }
+
+    public void CreateMultiTextureMaterials(List<Material> materials, List<string> materialNames, Dictionary<string, string> texturePaths, Dictionary<string, string> alphaPaths, Dictionary<string, string> textureUVNames, Dictionary<string, TextureWrapData> textureWrapModes)
     {
         DebugLogger.LogEggImporter($"[MultiTex] Processing {materialNames.Count} material names for multi-texture support");
 
@@ -232,9 +226,7 @@ public class MaterialHandler
 
         foreach (string matName in materialNames)
         {
-            // Check for alpha blend marker
-            bool needsAlphaBlend = matName.EndsWith("_ALPHABLEND");
-            string cleanMatName = needsAlphaBlend ? matName.Substring(0, matName.Length - 11) : matName;
+            EggMaterialState materialState = DecodeOrResolveMaterialState(matName, textureWrapModes, out string cleanMatName);
 
             if (cleanMatName.Contains("||"))
             {
@@ -328,10 +320,12 @@ public class MaterialHandler
                         }
                     }
 
-                    // Create material with appropriate shader (transparent if alpha blend needed)
-                    Shader shader = needsAlphaBlend ? GetCachedTransparentShader() : GetCachedVertexColorShader();
+                    // Create material with appropriate shader for the resolved Panda3D transparency mode.
+                    Shader shader = materialState.IsTransparent ? GetCachedTransparentShader() : GetCachedVertexColorShader();
 
                     Material mat = new Material(shader) { name = matName };
+                    string alphaChannel;
+                    Texture2D alphaTex = FindFirstAlphaTexture(texNames, alphaPaths, textureWrapModes, out alphaChannel);
 
                     if (mainTex)
                     {
@@ -343,6 +337,12 @@ public class MaterialHandler
                     {
                         mat.SetTexture("_BlendTex", blendTex);
                         DebugLogger.LogEggImporter($"[MultiTex] Set _BlendTex: {blendTex.name} (samples UV1)");
+                    }
+
+                    if (alphaTex && mat.HasProperty("_AlphaTex"))
+                    {
+                        mat.SetTexture("_AlphaTex", alphaTex);
+                        SetAlphaChannel(mat, alphaChannel);
                     }
 
                     // Shader uses: _MainTex → UV0, _BlendTex → UV1
@@ -367,13 +367,14 @@ public class MaterialHandler
                     DebugLogger.LogEggImporter($"[WrapMode] Multi-texture material using natural UV wrapping");
 
                     mat.SetColor("_Color", Color.white);
+                    ConfigureMaterialRenderState(mat, materialState, alphaTex != null, false);
                     materials.Add(mat);
                     createdMultiTexMaterials.Add(matName);
                 }
             }
-            else if (needsAlphaBlend && !cleanMatName.Contains("||"))
+            else if (matName != cleanMatName && !cleanMatName.Contains("||"))
             {
-                // Single-texture material with alpha blend
+                // Single-texture material with a render-state variant.
                 // Check if base material exists
                 Material baseMat = materials.FirstOrDefault(m => m.name == cleanMatName);
                 if (baseMat != null)
@@ -381,13 +382,15 @@ public class MaterialHandler
                     // Skip if already created
                     if (createdMultiTexMaterials.Contains(matName))
                     {
-                        DebugLogger.LogEggImporter($"[AlphaBlend] Skipping duplicate single-tex material: {matName}");
+                        DebugLogger.LogEggImporter($"[RenderState] Skipping duplicate single-tex material: {matName}");
                         continue;
                     }
 
-                    // Create alpha blend version with transparent shader
-                    Shader transparentShader = GetCachedTransparentShader();
-                    Material alphaMat = new Material(transparentShader) { name = matName };
+                    bool variantUsesParticleGUI = baseMat.shader != null && baseMat.shader.name == "EggImporter/ParticleGUI";
+                    Shader shader = variantUsesParticleGUI
+                        ? baseMat.shader
+                        : (materialState.IsTransparent ? GetCachedTransparentShader() : GetCachedVertexColorShader());
+                    Material alphaMat = new Material(shader) { name = matName };
                     
                     // Enable GPU Instancing
                     alphaMat.enableInstancing = true;
@@ -402,14 +405,17 @@ public class MaterialHandler
                         alphaMat.SetColor("_Color", baseMat.GetColor("_Color"));
                     if (baseMat.HasProperty("_Cull") && alphaMat.HasProperty("_Cull"))
                         alphaMat.SetFloat("_Cull", baseMat.GetFloat("_Cull"));
+                    if (baseMat.HasProperty("_AlphaChannel") && alphaMat.HasProperty("_AlphaChannel"))
+                        alphaMat.SetFloat("_AlphaChannel", baseMat.GetFloat("_AlphaChannel"));
 
+                    ConfigureMaterialRenderState(alphaMat, materialState, alphaMat.HasProperty("_AlphaTex") && alphaMat.GetTexture("_AlphaTex") != null, variantUsesParticleGUI);
                     materials.Add(alphaMat);
                     createdMultiTexMaterials.Add(matName);
-                    DebugLogger.LogEggImporter($"[AlphaBlend] Created single-tex alpha blend material: {matName}");
+                    DebugLogger.LogEggImporter($"[RenderState] Created single-tex render-state material: {matName}");
                 }
                 else
                 {
-                    DebugLogger.LogWarningEggImporter($"[AlphaBlend] Base material '{cleanMatName}' not found for alpha blend variant '{matName}'");
+                    DebugLogger.LogWarningEggImporter($"[RenderState] Base material '{cleanMatName}' not found for variant '{matName}'");
                 }
             }
         }
@@ -545,6 +551,124 @@ public class MaterialHandler
         DefaultColorCache[materialName] = color;
         return color;
     }
+
+    private EggMaterialState DecodeOrResolveMaterialState(string materialName, Dictionary<string, TextureWrapData> textureWrapModes, out string cleanMaterialName)
+    {
+        EggMaterialState state;
+        if (EggMaterialRenderState.TryDecodeMaterialName(materialName, out cleanMaterialName, out state))
+        {
+            return state;
+        }
+
+        if (!string.IsNullOrEmpty(materialName) && materialName.EndsWith("_ALPHABLEND", StringComparison.Ordinal))
+        {
+            cleanMaterialName = materialName.Substring(0, materialName.Length - "_ALPHABLEND".Length);
+            return new EggMaterialState { AlphaMode = EggAlphaMode.Blend, DepthWrite = true };
+        }
+
+        cleanMaterialName = materialName;
+        return ResolveMaterialStateForTextures(cleanMaterialName, textureWrapModes);
+    }
+
+    private EggMaterialState ResolveMaterialStateForTextures(string cleanMaterialName, Dictionary<string, TextureWrapData> textureWrapModes)
+    {
+        var textureRefs = cleanMaterialName.Split(new[] { "||" }, StringSplitOptions.RemoveEmptyEntries);
+        return EggMaterialRenderState.Resolve(new EggRenderState(), textureRefs, textureWrapModes, false);
+    }
+
+    private Texture2D FindFirstAlphaTexture(string[] textureNames, Dictionary<string, string> alphaPaths, Dictionary<string, TextureWrapData> textureWrapModes, out string alphaChannel)
+    {
+        alphaChannel = "";
+        if (textureNames == null || alphaPaths == null) return null;
+
+        for (int i = 0; i < textureNames.Length; i++)
+        {
+            string alphaPath;
+            if (!alphaPaths.TryGetValue(textureNames[i], out alphaPath) || string.IsNullOrEmpty(alphaPath))
+            {
+                continue;
+            }
+
+            Texture2D alphaTex = FindTextureInProject(alphaPath);
+            if (alphaTex)
+            {
+                TextureWrapData textureData;
+                if (textureWrapModes != null && textureWrapModes.TryGetValue(textureNames[i], out textureData))
+                {
+                    alphaChannel = textureData.alphaFileChannel;
+                }
+                return alphaTex;
+            }
+        }
+
+        return null;
+    }
+
+    private void SetAlphaChannel(Material mat, string alphaFileChannel)
+    {
+        if (mat == null || !mat.HasProperty(AlphaChannelPropertyId)) return;
+
+        float channel = 0.0f;
+        if (!string.IsNullOrEmpty(alphaFileChannel))
+        {
+            string normalized = alphaFileChannel.Trim().ToLowerInvariant();
+            if (normalized == "g" || normalized == "green" || normalized == "1")
+                channel = 1.0f;
+            else if (normalized == "b" || normalized == "blue" || normalized == "2")
+                channel = 2.0f;
+            else if (normalized == "a" || normalized == "alpha" || normalized == "3")
+                channel = 3.0f;
+        }
+
+        mat.SetFloat(AlphaChannelPropertyId, channel);
+    }
+
+    private void ConfigureMaterialRenderState(Material mat, EggMaterialState state, bool hasAlphaTexture, bool useParticleGUI)
+    {
+        if (mat == null) return;
+        if (state == null) state = new EggMaterialState();
+
+        if (mat.HasProperty(UseAlphaTexPropertyId))
+            mat.SetFloat(UseAlphaTexPropertyId, hasAlphaTexture ? 1.0f : 0.0f);
+        if (mat.HasProperty(UseAlphaTestPropertyId))
+            mat.SetFloat(UseAlphaTestPropertyId, state.UsesAlphaTest ? 1.0f : 0.0f);
+        if (mat.HasProperty(CutoffPropertyId))
+            mat.SetFloat(CutoffPropertyId, state.UsesAlphaTest ? 0.5f : 0.001f);
+        if (mat.HasProperty(AlphaPropertyId))
+            mat.SetFloat(AlphaPropertyId, 1.0f);
+
+        if (mat.HasProperty(CullPropertyId))
+        {
+            bool doubleSided = hasAlphaTexture || state.IsTransparent || state.UsesAlphaTest || useParticleGUI;
+            mat.SetInt(CullPropertyId, doubleSided ? (int)UnityEngine.Rendering.CullMode.Off : (int)UnityEngine.Rendering.CullMode.Back);
+        }
+
+        if (mat.HasProperty(ZWritePropertyId))
+            mat.SetInt(ZWritePropertyId, state.DepthWrite ? 1 : 0);
+
+        if (mat.HasProperty(SrcBlendPropertyId))
+        {
+            int srcBlend = state.AlphaMode == EggAlphaMode.Premultiplied
+                ? (int)UnityEngine.Rendering.BlendMode.One
+                : (int)UnityEngine.Rendering.BlendMode.SrcAlpha;
+            mat.SetInt(SrcBlendPropertyId, srcBlend);
+        }
+
+        if (mat.HasProperty(DstBlendPropertyId))
+            mat.SetInt(DstBlendPropertyId, (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+
+        int baseQueue = (int)UnityEngine.Rendering.RenderQueue.Geometry;
+        if (state.UsesAlphaTest)
+        {
+            baseQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
+        }
+        else if (state.IsTransparent || useParticleGUI)
+        {
+            baseQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+        }
+
+        mat.renderQueue = Mathf.Clamp(baseQueue + state.DrawOrder, 0, 5000);
+    }
     
     public Dictionary<string, Material> CreateMaterialDictionary(List<Material> materials)
     {
@@ -566,10 +690,15 @@ public class MaterialHandler
         return materialDict;
     }
     
-    private Material CreateVertexColorMaterial(string materialName, bool useAlphaBlend = false)
+    private Material CreateVertexColorMaterial(string materialName, EggMaterialState materialState = null)
     {
+        if (materialState == null)
+        {
+            materialState = new EggMaterialState();
+        }
+
         // Cache shaders to avoid repeated Shader.Find calls
-        Shader shader = useAlphaBlend ? GetCachedTransparentShader() : GetCachedVertexColorShader();
+        Shader shader = materialState.IsTransparent ? GetCachedTransparentShader() : GetCachedVertexColorShader();
 
         Material mat = new Material(shader) { name = materialName };
 

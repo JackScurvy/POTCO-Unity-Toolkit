@@ -6,7 +6,14 @@ Shader "EggImporter/ParticleGUI"
         _AlphaTex ("Alpha Mask (Optional)", 2D) = "white" {}
         _Color ("Tint Color", Color) = (1,1,1,1)
         _Alpha ("Alpha Multiplier", Range(0, 1)) = 1
+        _Cutoff ("Alpha Cutoff", Range(0, 1)) = 0.5
+        _UseAlphaTex ("Use Alpha Mask", Float) = 0
+        _UseAlphaTest ("Use Alpha Test", Float) = 0
+        _AlphaChannel ("Alpha Mask Channel", Float) = 0
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 0 // Off by default for particles
+        [Enum(Off,0,On,1)] _ZWrite ("ZWrite", Float) = 0
+        [Enum(UnityEngine.Rendering.BlendMode)] _SrcBlend ("Source Blend", Float) = 5
+        [Enum(UnityEngine.Rendering.BlendMode)] _DstBlend ("Destination Blend", Float) = 10
     }
     SubShader
     {
@@ -14,8 +21,8 @@ Shader "EggImporter/ParticleGUI"
         LOD 100
         
         // Standard particle/GUI settings
-        ZWrite Off
-        Blend SrcAlpha OneMinusSrcAlpha
+        ZWrite [_ZWrite]
+        Blend [_SrcBlend] [_DstBlend]
         Cull [_Cull]
 
         Pass
@@ -47,6 +54,18 @@ Shader "EggImporter/ParticleGUI"
             sampler2D _AlphaTex;
             fixed4 _Color;
             float _Alpha;
+            float _Cutoff;
+            float _UseAlphaTex;
+            float _UseAlphaTest;
+            float _AlphaChannel;
+
+            fixed SelectAlphaChannel(fixed4 alphaTexColor)
+            {
+                if (_AlphaChannel > 2.5) return alphaTexColor.a;
+                if (_AlphaChannel > 1.5) return alphaTexColor.b;
+                if (_AlphaChannel > 0.5) return alphaTexColor.g;
+                return alphaTexColor.r;
+            }
 
             v2f vert (appdata v)
             {
@@ -69,15 +88,17 @@ Shader "EggImporter/ParticleGUI"
                 // Apply Vertex Color and Tint (Unlit)
                 col *= i.color * _Color;
                 
-                // Apply Gradient Alpha Logic (ShoreFoam style)
-                // If alpha mask is present (not white), use its Red channel as alpha multiplier
-                // allowing for smooth gradients
-                if (alphaSample.r < 0.99 || alphaSample.g < 0.99 || alphaSample.b < 0.99)
+                if (_UseAlphaTex > 0.5)
                 {
-                    col.a *= alphaSample.r;
+                    col.a *= SelectAlphaChannel(alphaSample);
                 }
                 
                 col.a *= _Alpha; // Global alpha multiplier
+
+                if (_UseAlphaTest > 0.5)
+                {
+                    clip(col.a - _Cutoff);
+                }
 
                 UNITY_APPLY_FOG(i.fogCoord, col);
                 return col;

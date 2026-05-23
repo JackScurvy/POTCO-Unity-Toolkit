@@ -12,6 +12,11 @@ public class TextureWrapData
 {
     public string wrapU = "repeat";
     public string wrapV = "repeat";
+    public string format = "unspecified";
+    public string envType = "modulate";
+    public string alphaFileChannel = "";
+    public bool hasAlphaFile = false;
+    public EggAlphaMode alphaMode = EggAlphaMode.Unspecified;
 }
 
 public class GeometryProcessor
@@ -28,6 +33,7 @@ public class GeometryProcessor
 
     // Store current asset path for context-aware LOD filtering
     private string _currentAssetPath = "";
+    private Dictionary<string, TextureWrapData> _textureRenderData = new Dictionary<string, TextureWrapData>();
 
     // Cache for best available LOD distance to avoid repeated file scans
     // Use asset path as cache key instead of array reference (optimization)
@@ -539,6 +545,8 @@ public class GeometryProcessor
 
     public void ParseAllTexturesAndVertices(string[] lines, List<EggVertex> vertexPool, Dictionary<string, string> texturePaths, Dictionary<string, string> alphaPaths, Dictionary<string, string> textureUVNames, Dictionary<string, TextureWrapData> textureWrapModes, ParserUtilities parserUtils)
     {
+        _textureRenderData = textureWrapModes;
+
         // Track current vertex pool context for proper vertex association
         string currentVertexPoolName = "";
 
@@ -589,7 +597,40 @@ public class GeometryProcessor
                                 if (isFirstDefinition)
                                 {
                                     alphaPaths[texName] = alphaPath;
+                                    wrapData.hasAlphaFile = true;
                                     DebugLogger.LogEggImporter($"[AlphaParse] Found alpha-file for {texName}: {alphaPath}");
+                                }
+                            }
+                        }
+                        else if (innerLine.StartsWith("<Scalar> alpha-file-channel"))
+                        {
+                            if (isFirstDefinition)
+                            {
+                                wrapData.alphaFileChannel = EggMaterialRenderState.ReadScalarValue(innerLine);
+                            }
+                        }
+                        else if (innerLine.StartsWith("<Scalar> format"))
+                        {
+                            if (isFirstDefinition)
+                            {
+                                wrapData.format = EggMaterialRenderState.ReadScalarValue(innerLine);
+                            }
+                        }
+                        else if (innerLine.StartsWith("<Scalar> envtype"))
+                        {
+                            if (isFirstDefinition)
+                            {
+                                wrapData.envType = EggMaterialRenderState.ReadScalarValue(innerLine);
+                            }
+                        }
+                        else if (innerLine.StartsWith("<Scalar> alpha"))
+                        {
+                            if (isFirstDefinition)
+                            {
+                                EggAlphaMode textureAlphaMode;
+                                if (EggMaterialRenderState.TryParseAlphaMode(EggMaterialRenderState.ReadScalarValue(innerLine), out textureAlphaMode))
+                                {
+                                    wrapData.alphaMode = textureAlphaMode;
                                 }
                             }
                         }
@@ -749,26 +790,28 @@ public class GeometryProcessor
 
     private void ParsePolygon(string[] lines, ref int i, Dictionary<string, List<int>> subMeshes, List<string> materialNames, bool isInCollisionGroup = false)
     {
+        ParsePolygon(lines, ref i, subMeshes, materialNames, new EggRenderState(), isInCollisionGroup);
+    }
+
+    private void ParsePolygon(string[] lines, ref int i, Dictionary<string, List<int>> subMeshes, List<string> materialNames, EggRenderState inheritedRenderState, bool isInCollisionGroup = false)
+    {
         string polygonTextureRef = "Default-Material";
         int blockEnd = _parserUtils.FindMatchingBrace(lines, i);
-        bool hasAlphaBlend = false;
+        EggRenderState polygonRenderState = inheritedRenderState != null ? inheritedRenderState.Clone() : new EggRenderState();
+        var textureRefs = new List<string>();
 
-        // Check for collision tags and alpha blend at polygon level
+        // Check for collision tags and render state at polygon level.
         bool isCollisionPolygon = isInCollisionGroup;
-        if (!isCollisionPolygon)
+        for (int j = i + 1; j < blockEnd; j++)
         {
-            for (int j = i + 1; j < blockEnd; j++)
+            string innerLine = lines[j].Trim();
+            if (innerLine.StartsWith("<Collide>"))
             {
-                string innerLine = lines[j].Trim();
-                if (innerLine.StartsWith("<Collide>"))
-                {
-                    isCollisionPolygon = true;
-                }
-                else if (innerLine.StartsWith("<Scalar> alpha") && innerLine.Contains("blend"))
-                {
-                    hasAlphaBlend = true;
-                    DebugLogger.LogEggImporter($"[AlphaBlend] Polygon uses alpha blending");
-                }
+                isCollisionPolygon = true;
+            }
+            else if (innerLine.StartsWith("<Scalar>"))
+            {
+                EggMaterialRenderState.ApplyScalarLine(polygonRenderState, innerLine);
             }
         }
 
@@ -792,7 +835,6 @@ public class GeometryProcessor
         // Collect ALL texture references for multi-texture support (skip if already set to Collision-Material)
         if (polygonTextureRef != "Collision-Material")
         {
-            var textureRefs = new List<string>();
             for (int j = i + 1; j < blockEnd; j++)
             {
                 string innerLine = lines[j].Trim();
@@ -828,10 +870,10 @@ public class GeometryProcessor
             // else keep "Default-Material"
         }
 
-        // Append alpha blend marker if needed
-        if (hasAlphaBlend && polygonTextureRef != "Collision-Material")
+        if (polygonTextureRef != "Collision-Material")
         {
-            polygonTextureRef += "_ALPHABLEND";
+            EggMaterialState materialState = EggMaterialRenderState.Resolve(polygonRenderState, textureRefs, _textureRenderData, false);
+            polygonTextureRef = EggMaterialRenderState.AppendState(polygonTextureRef, materialState);
         }
 
         if (!subMeshes.ContainsKey(polygonTextureRef)) { subMeshes[polygonTextureRef] = new List<int>(); materialNames.Add(polygonTextureRef); }
@@ -970,6 +1012,11 @@ public class GeometryProcessor
 
     public void BuildHierarchyAndMapGeometry(string[] lines, int start, int end, string currentPath, Dictionary<string, Transform> hierarchyMap, Dictionary<string, GeometryData> geometryMap, bool isInCollisionContext = false)
     {
+        BuildHierarchyAndMapGeometry(lines, start, end, currentPath, hierarchyMap, geometryMap, new EggRenderState(), isInCollisionContext);
+    }
+
+    private void BuildHierarchyAndMapGeometry(string[] lines, int start, int end, string currentPath, Dictionary<string, Transform> hierarchyMap, Dictionary<string, GeometryData> geometryMap, EggRenderState inheritedRenderState, bool isInCollisionContext = false)
+    {
         // Detect ship LOD variant sets at this level if we're in a ship model
         Dictionary<string, List<string>> shipLODVariantSets = new Dictionary<string, List<string>>();
         if (IsShipModel())
@@ -1061,6 +1108,8 @@ public class GeometryProcessor
                 usedNames.Add(uniqueName);
 
                 string newPath = string.IsNullOrEmpty(currentPath) ? uniqueName : currentPath + "/" + uniqueName;
+                EggRenderState childRenderState = inheritedRenderState != null ? inheritedRenderState.Clone() : new EggRenderState();
+                ApplyDirectRenderStateScalars(lines, i + 1, groupEnd, childRenderState);
 
                 GameObject newGO = new GameObject(uniqueName);
                 newGO.transform.SetParent(hierarchyMap[currentPath], false);
@@ -1073,7 +1122,7 @@ public class GeometryProcessor
 
                 // Pass collision context down recursively - either from parent context OR if this group is a collision group
                 bool childIsInCollisionContext = isInCollisionContext || isCollisionGroup;
-                BuildHierarchyAndMapGeometry(lines, i + 1, groupEnd, newPath, hierarchyMap, geometryMap, childIsInCollisionContext);
+                BuildHierarchyAndMapGeometry(lines, i + 1, groupEnd, newPath, hierarchyMap, geometryMap, childRenderState, childIsInCollisionContext);
                 i = groupEnd + 1;
             }
             else if (trimmedLine.StartsWith("<Transform>".AsSpan(), StringComparison.Ordinal))
@@ -1110,13 +1159,47 @@ public class GeometryProcessor
                 {
                     geometryMap[currentPath] = new GeometryData();
                 }
-                ParsePolygon(lines, ref i, geometryMap[currentPath].subMeshes, geometryMap[currentPath].materialNames, isInCollisionContext);
+                ParsePolygon(lines, ref i, geometryMap[currentPath].subMeshes, geometryMap[currentPath].materialNames, inheritedRenderState, isInCollisionContext);
             }
             else
             {
                 i++;
             }
         }
+    }
+
+    private void ApplyDirectRenderStateScalars(string[] lines, int start, int end, EggRenderState state)
+    {
+        for (int i = start; i < end; i++)
+        {
+            string line = lines[i].Trim();
+            if (line.StartsWith("<Scalar>"))
+            {
+                EggMaterialRenderState.ApplyScalarLine(state, line);
+                continue;
+            }
+
+            if (ShouldSkipRenderStateBlock(line))
+            {
+                int blockEnd = _parserUtils.FindMatchingBrace(lines, i);
+                if (blockEnd > i)
+                {
+                    i = blockEnd;
+                }
+            }
+        }
+    }
+
+    private bool ShouldSkipRenderStateBlock(string line)
+    {
+        return line.StartsWith("<Group>") ||
+               line.StartsWith("<Polygon>") ||
+               line.StartsWith("<VertexPool>") ||
+               line.StartsWith("<Texture>") ||
+               line.StartsWith("<Transform>") ||
+               line.StartsWith("<Joint>") ||
+               line.StartsWith("<Bundle>") ||
+               line.StartsWith("<Table>");
     }
 
     private void ParseTransform(string[] lines, ref int i, GameObject go)

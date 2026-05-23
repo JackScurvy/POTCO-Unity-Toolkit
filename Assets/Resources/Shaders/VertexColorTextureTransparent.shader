@@ -7,6 +7,11 @@ Shader "EggImporter/VertexColorTextureTransparent"
         _AlphaTex ("Alpha Mask (optional)", 2D) = "white" {}
         _Color ("Color", Color) = (1,1,1,1)
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 2
+        [Enum(Off,0,On,1)] _ZWrite ("ZWrite", Float) = 0
+        [Enum(UnityEngine.Rendering.BlendMode)] _SrcBlend ("Source Blend", Float) = 5
+        [Enum(UnityEngine.Rendering.BlendMode)] _DstBlend ("Destination Blend", Float) = 10
+        _UseAlphaTex ("Use Alpha Mask", Float) = 0
+        _AlphaChannel ("Alpha Mask Channel", Float) = 0
         _SwapUVChannels ("Swap UV Channels", Float) = 0
         _MainTexWrap ("Main Tex Wrap", Vector) = (0,0,0,0)
         _BlendTexWrap ("Blend Tex Wrap", Vector) = (0,0,0,0)
@@ -17,8 +22,8 @@ Shader "EggImporter/VertexColorTextureTransparent"
         Tags { "Queue"="Transparent" "RenderType"="Transparent" "IgnoreProjector"="True" }
         LOD 200
         Cull [_Cull]
-        ZWrite Off
-        Blend SrcAlpha OneMinusSrcAlpha
+        ZWrite [_ZWrite]
+        Blend [_SrcBlend] [_DstBlend]
 
         CGPROGRAM
         #pragma surface surf BrightLambert vertex:vert alpha:fade
@@ -29,6 +34,8 @@ Shader "EggImporter/VertexColorTextureTransparent"
         sampler2D _BlendTex;
         sampler2D _AlphaTex;
         fixed4 _Color;
+        float _UseAlphaTex;
+        float _AlphaChannel;
         float _SwapUVChannels;
         float4 _MainTexWrap;
         float4 _BlendTexWrap;
@@ -46,6 +53,14 @@ Shader "EggImporter/VertexColorTextureTransparent"
             if (wrapMode.x > 0.5) result.x = saturate(result.x);
             if (wrapMode.y > 0.5) result.y = saturate(result.y);
             return result;
+        }
+
+        fixed SelectAlphaChannel(fixed4 alphaTexColor)
+        {
+            if (_AlphaChannel > 2.5) return alphaTexColor.a;
+            if (_AlphaChannel > 1.5) return alphaTexColor.b;
+            if (_AlphaChannel > 0.5) return alphaTexColor.g;
+            return alphaTexColor.r;
         }
 
         void vert(inout appdata_full v, out Input o)
@@ -86,10 +101,9 @@ Shader "EggImporter/VertexColorTextureTransparent"
 
             fixed4 alphaTexColor = tex2D(_AlphaTex, float2(IN.uv_MainTex.x, 1.0 - IN.uv_MainTex.y));
 
-            if (alphaTexColor.r < 0.99 || alphaTexColor.g < 0.99 || alphaTexColor.b < 0.99)
+            if (_UseAlphaTex > 0.5)
             {
-                fixed aMask = alphaTexColor.r * 0.5;
-                o.Alpha = aMask * finalColor.a;
+                o.Alpha = SelectAlphaChannel(alphaTexColor) * finalColor.a;
             }
             else
             {

@@ -8,6 +8,9 @@ Shader "EggImporter/VertexColorTexture"
         _Color ("Color", Color) = (1,1,1,1)
         _Cutoff ("Alpha Cutoff", Range(0,1)) = 0.1
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 2
+        [Enum(Off,0,On,1)] _ZWrite ("ZWrite", Float) = 1
+        _UseAlphaTex ("Use Alpha Mask", Float) = 0
+        _AlphaChannel ("Alpha Mask Channel", Float) = 0
         _SwapUVChannels ("Swap UV Channels", Float) = 0
         _MainTexWrap ("Main Tex Wrap", Vector) = (0,0,0,0)  // x=wrapU, y=wrapV (0=repeat, 1=clamp)
         _BlendTexWrap ("Blend Tex Wrap", Vector) = (0,0,0,0)
@@ -16,6 +19,7 @@ Shader "EggImporter/VertexColorTexture"
     {
         LOD 200
         Cull [_Cull]
+        ZWrite [_ZWrite]
         
         CGPROGRAM
         #pragma surface surf BrightLambert vertex:vert alphatest:_Cutoff
@@ -26,6 +30,8 @@ Shader "EggImporter/VertexColorTexture"
         sampler2D _BlendTex;
         sampler2D _AlphaTex;
         fixed4 _Color;
+        float _UseAlphaTex;
+        float _AlphaChannel;
         float _SwapUVChannels;
         float4 _MainTexWrap;
         float4 _BlendTexWrap;
@@ -49,6 +55,14 @@ Shader "EggImporter/VertexColorTexture"
             if (wrapMode.y > 0.5) result.y = saturate(result.y);
 
             return result;
+        }
+
+        fixed SelectAlphaChannel(fixed4 alphaTexColor)
+        {
+            if (_AlphaChannel > 2.5) return alphaTexColor.a;
+            if (_AlphaChannel > 1.5) return alphaTexColor.b;
+            if (_AlphaChannel > 0.5) return alphaTexColor.g;
+            return alphaTexColor.r;
         }
 
         void vert(inout appdata_full v, out Input o)
@@ -101,20 +115,14 @@ Shader "EggImporter/VertexColorTexture"
 
             o.Albedo = finalColor.rgb;
             
-            // Check if alpha texture is assigned (not white)
             fixed4 alphaTexColor = tex2D(_AlphaTex, float2(IN.uv_MainTex.x, 1.0 - IN.uv_MainTex.y));
             
-            // If alpha texture is essentially white (1,1,1), use regular alpha
-            // Otherwise use the alpha mask
-            if (alphaTexColor.r < 0.99 || alphaTexColor.g < 0.99 || alphaTexColor.b < 0.99)
+            if (_UseAlphaTex > 0.5)
             {
-                // Alpha mask is assigned - use it with binary cutoff
-                fixed aMask = alphaTexColor.r * 0.5;
-                o.Alpha = aMask * finalColor.a;
+                o.Alpha = SelectAlphaChannel(alphaTexColor) * finalColor.a;
             }
             else
             {
-                // No alpha mask - use regular alpha
                 o.Alpha = finalColor.a;
             }
         }

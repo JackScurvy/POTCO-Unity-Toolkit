@@ -464,7 +464,7 @@ public class EggImporter : ScriptedImporter
         {
             allMaterialNames.AddRange(geo.materialNames);
         }
-        _materialHandler.CreateMultiTextureMaterials(_materials, allMaterialNames, texturePaths, textureUVNames, textureWrapModes);
+        _materialHandler.CreateMultiTextureMaterials(_materials, allMaterialNames, texturePaths, alphaPaths, textureUVNames, textureWrapModes);
         _materialDict = _materialHandler.CreateMaterialDictionary(_materials); // Rebuild dict with new materials
         RecordTiming("Create Multi-Texture Materials");
 
