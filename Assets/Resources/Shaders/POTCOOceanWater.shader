@@ -8,6 +8,17 @@ Shader "POTCO/Ocean Water"
         _WaterColor ("Water Color", Color) = (0.729, 0.729, 0.729, 1)
         _ReflectionTex ("Reflection Texture", 2D) = "black" {}
 
+        [Header(Island Ocean Maps)]
+        _IslandWaterColorTex ("Island Water Color Map", 2D) = "white" {}
+        _IslandWaterAlphaTex ("Island Inverse Alpha Map", 2D) = "black" {}
+        _UseIslandWaterMaps ("Use Island Water Maps", Float) = 0
+        _IslandColorMapU ("Island Color Map U Row", Vector) = (0, 0, 0, 0)
+        _IslandColorMapV ("Island Color Map V Row", Vector) = (0, 0, 0, 0)
+        _IslandAlphaMapU ("Island Alpha Map U Row", Vector) = (0, 0, 0, 0)
+        _IslandAlphaMapV ("Island Alpha Map V Row", Vector) = (0, 0, 0, 0)
+        _IslandColorStrength ("Island Color Strength", Range(0, 1)) = 1
+        _IslandAlphaStrength ("Island Alpha Strength", Range(0, 1)) = 1
+
         [Header(UV Animation)]
         _UVScale ("UV Scale", Vector) = (0.03, 0.03, 0, 0)
         _UVSpeedA ("UV Speed A", Vector) = (0.54, 0.015, 0, 0)
@@ -93,6 +104,10 @@ Shader "POTCO/Ocean Water"
             SAMPLER(sampler_DetailMap);
             TEXTURE2D(_ReflectionTex);
             SAMPLER(sampler_ReflectionTex);
+            TEXTURE2D(_IslandWaterColorTex);
+            SAMPLER(sampler_IslandWaterColorTex);
+            TEXTURE2D(_IslandWaterAlphaTex);
+            SAMPLER(sampler_IslandWaterAlphaTex);
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _BaseMap_ST;
@@ -117,6 +132,13 @@ Shader "POTCO/Ocean Water"
                 float _WaveContrast;
                 float _WaveShadingStrength;
                 float4x4 _ReflectionMatrix;
+                float _UseIslandWaterMaps;
+                float4 _IslandColorMapU;
+                float4 _IslandColorMapV;
+                float4 _IslandAlphaMapU;
+                float4 _IslandAlphaMapV;
+                float _IslandColorStrength;
+                float _IslandAlphaStrength;
             CBUFFER_END
 
             // Simple vertical wave calculation (up/down motion only, no horizontal displacement)
@@ -137,6 +159,28 @@ Shader "POTCO/Ocean Water"
                     amplitude * sin(f),
                     0
                 );
+            }
+
+            float2 IslandMapUv(float3 positionWS, float4 uRow, float4 vRow)
+            {
+                float2 worldXZ = positionWS.xz;
+                return float2(dot(uRow.xy, worldXZ) + uRow.z, dot(vRow.xy, worldXZ) + vRow.z);
+            }
+
+            void ApplyIslandWaterMaps(float3 positionWS, inout half4 baseColor)
+            {
+                if (_UseIslandWaterMaps <= 0.5)
+                    return;
+
+                float2 colorUv = IslandMapUv(positionWS, _IslandColorMapU, _IslandColorMapV);
+                float colorWeight = saturate(_IslandColorStrength);
+                half3 islandColor = SAMPLE_TEXTURE2D(_IslandWaterColorTex, sampler_IslandWaterColorTex, saturate(colorUv)).rgb;
+                baseColor.rgb = lerp(baseColor.rgb, islandColor, colorWeight);
+
+                float2 alphaUv = IslandMapUv(positionWS, _IslandAlphaMapU, _IslandAlphaMapV);
+                float alphaWeight = saturate(_IslandAlphaStrength);
+                half inverseAlpha = SAMPLE_TEXTURE2D(_IslandWaterAlphaTex, sampler_IslandWaterAlphaTex, saturate(alphaUv)).r;
+                baseColor.a *= saturate(1.0 - inverseAlpha * alphaWeight);
             }
 
             Varyings vert(Attributes input)
@@ -191,6 +235,7 @@ Shader "POTCO/Ocean Water"
                 // Base color with tint control
                 half4 baseColor = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, uv1);
                 baseColor.rgb = lerp(baseColor.rgb, baseColor.rgb * _WaterColor.rgb, _ColorTint);
+                ApplyIslandWaterMaps(input.positionWS, baseColor);
 
                 // Apply wave contrast to separate waves visually
                 baseColor.rgb = pow(baseColor.rgb, _WaveContrast);
@@ -292,6 +337,8 @@ Shader "POTCO/Ocean Water"
             sampler2D _BaseMap;
             sampler2D _NormalMap;
             sampler2D _ReflectionTex;
+            sampler2D _IslandWaterColorTex;
+            sampler2D _IslandWaterAlphaTex;
             float4 _WaterColor;
             float4 _UVScale;
             float4 _UVSpeedA;
@@ -311,6 +358,13 @@ Shader "POTCO/Ocean Water"
             float _ColorTint;
             float _Brightness;
             float4x4 _ReflectionMatrix;
+            float _UseIslandWaterMaps;
+            float4 _IslandColorMapU;
+            float4 _IslandColorMapV;
+            float4 _IslandAlphaMapU;
+            float4 _IslandAlphaMapV;
+            float _IslandColorStrength;
+            float _IslandAlphaStrength;
 
             float3 GerstnerWave(float3 posLocal, float4 wave, float2 dir)
             {
@@ -323,6 +377,28 @@ Shader "POTCO/Ocean Water"
                 float f = k * (dot(d, posLocal.xz) - c * _TimeSec * spd);
                 // Only vertical displacement - no horizontal movement
                 return float3(0, amp * sin(f), 0);
+            }
+
+            float2 IslandMapUv(float3 worldPos, float4 uRow, float4 vRow)
+            {
+                float2 worldXZ = worldPos.xz;
+                return float2(dot(uRow.xy, worldXZ) + uRow.z, dot(vRow.xy, worldXZ) + vRow.z);
+            }
+
+            void ApplyIslandWaterMaps(float3 worldPos, inout fixed4 baseColor)
+            {
+                if (_UseIslandWaterMaps <= 0.5)
+                    return;
+
+                float2 colorUv = IslandMapUv(worldPos, _IslandColorMapU, _IslandColorMapV);
+                float colorWeight = saturate(_IslandColorStrength);
+                fixed3 islandColor = tex2D(_IslandWaterColorTex, saturate(colorUv)).rgb;
+                baseColor.rgb = lerp(baseColor.rgb, islandColor, colorWeight);
+
+                float2 alphaUv = IslandMapUv(worldPos, _IslandAlphaMapU, _IslandAlphaMapV);
+                float alphaWeight = saturate(_IslandAlphaStrength);
+                fixed inverseAlpha = tex2D(_IslandWaterAlphaTex, saturate(alphaUv)).r;
+                baseColor.a *= saturate(1.0 - inverseAlpha * alphaWeight);
             }
 
             v2f vert(appdata v)
@@ -374,6 +450,7 @@ Shader "POTCO/Ocean Water"
                 // Base color with tint control
                 fixed4 baseColor = tex2D(_BaseMap, uv1);
                 baseColor.rgb = lerp(baseColor.rgb, baseColor.rgb * _WaterColor.rgb, _ColorTint);
+                ApplyIslandWaterMaps(i.worldPos, baseColor);
 
                 // Apply wave contrast to separate waves visually
                 baseColor.rgb = pow(baseColor.rgb, _WaveContrast);

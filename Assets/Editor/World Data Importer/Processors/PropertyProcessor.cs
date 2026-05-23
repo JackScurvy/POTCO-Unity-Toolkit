@@ -3,6 +3,7 @@ using WorldDataImporter.Utilities;
 using WorldDataImporter.Data;
 using POTCO;
 using POTCO.Editor;
+using POTCO.Ocean;
 using System.Collections.Generic;
 using System.Linq;
 using DebugLogger = POTCO.Editor.DebugLogger;
@@ -241,9 +242,15 @@ namespace WorldDataImporter.Processors
                         // Apply any pending visual modifications (only if enabled)
                         if (instance != null)
                         {
+                            // --- AUTOMATIC ISLAND WATER METADATA INJECTION ---
+                            if (IsIslandModelPath(modelPath))
+                            {
+                                AttachIslandOceanMetadata(modelPath, currentGO, useEgg);
+                            }
+                            // -----------------------------------------------
+
                             // --- AUTOMATIC SHORELINE FOAM INJECTION ---
-                            // Check if this is an island model
-                            if (modelPath.Contains("models/islands/") || modelPath.Contains("pir_m_are_isl_"))
+                            if (IsIslandModelPath(modelPath))
                             {
                                 // Construct foam model path: add "_wave_none" before extension (which is implied)
                                 // e.g. "phase_2/models/islands/pir_m_are_isl_delFuego" -> ".../pir_m_are_isl_delFuego_wave_none"
@@ -284,13 +291,13 @@ namespace WorldDataImporter.Processors
                                         if (foamShader != null)
                                         {
                                             // 1. Capture existing texture from the current material
-                                            Material mat = r.material;
+                                            Material sourceMaterial = r.sharedMaterial;
                                             Texture existingTex = null;
                                             
-                                            if (mat.HasProperty("_MainTex"))
-                                                existingTex = mat.GetTexture("_MainTex");
-                                            else if (mat.HasProperty("_BaseMap"))
-                                                existingTex = mat.GetTexture("_BaseMap");
+                                            if (sourceMaterial != null && sourceMaterial.HasProperty("_MainTex"))
+                                                existingTex = sourceMaterial.GetTexture("_MainTex");
+                                            else if (sourceMaterial != null && sourceMaterial.HasProperty("_BaseMap"))
+                                                existingTex = sourceMaterial.GetTexture("_BaseMap");
                                             
                                             if (existingTex == null)
                                             {
@@ -298,6 +305,9 @@ namespace WorldDataImporter.Processors
                                             }
 
                                             // 2. Swap shader to POTCO/ShoreFoam
+                                            Material mat = sourceMaterial != null ? new Material(sourceMaterial) : new Material(foamShader);
+                                            mat.name = sourceMaterial != null ? sourceMaterial.name + "_ShoreFoam" : "ShoreFoam_Runtime";
+                                            r.sharedMaterial = mat;
                                             mat.shader = foamShader;
                                             
                                             // 3. Restore texture
@@ -743,6 +753,36 @@ namespace WorldDataImporter.Processors
 
             // Note: NPC spawning is now handled after all properties are processed
             // (moved to SceneBuildingAlgorithm when object is complete)
+        }
+
+        private static bool IsIslandModelPath(string modelPath)
+        {
+            if (string.IsNullOrEmpty(modelPath))
+                return false;
+
+            string lowerPath = modelPath.Replace('\\', '/').ToLowerInvariant();
+            return (lowerPath.Contains("models/islands/") || lowerPath.Contains("pir_m_are_isl_")) &&
+                   !lowerPath.EndsWith("_ocean") &&
+                   !lowerPath.EndsWith("_wave_none");
+        }
+
+        private static void AttachIslandOceanMetadata(string modelPath, GameObject parentGO, bool useEgg)
+        {
+            string oceanModelPath = modelPath + "_ocean";
+            GameObject oceanInstance = AssetUtilities.InstantiatePrefab(oceanModelPath, parentGO, useEgg, null);
+            if (oceanInstance == null)
+                return;
+
+            oceanInstance.transform.localPosition = Vector3.zero;
+            oceanInstance.transform.localRotation = Quaternion.identity;
+            oceanInstance.transform.localScale = Vector3.one;
+
+            IslandOceanProfile profile = oceanInstance.GetComponent<IslandOceanProfile>();
+            if (profile == null)
+                profile = oceanInstance.AddComponent<IslandOceanProfile>();
+
+            profile.RefreshFromChildren();
+            DebugLogger.LogWorldImporter($"🌊 Found and attached island ocean metadata: {oceanModelPath}");
         }
 
         public static void ApplyNpcWorldPlacementFromGridPos(GameObject currentGO, ObjectData objectData)

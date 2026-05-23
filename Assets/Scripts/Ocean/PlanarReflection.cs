@@ -26,12 +26,12 @@ namespace POTCO.Ocean
         [Tooltip("Use screen resolution for reflection (HIGH PERFORMANCE COST - Keep False)")]
         public bool useScreenResolution = false;
 
-        [Tooltip("Resolution of reflection texture. 128 is best for performance.")]
-        public int textureSize = 128;
+        [Tooltip("Resolution of reflection texture. 256 balances quality and performance.")]
+        public int textureSize = 256;
 
         [Tooltip("Update reflection every N frames. 1 = every frame, 2 = every other frame, etc.")]
         [Range(1, 10)]
-        public int updateInterval = 3;
+        public int updateInterval = 2;
 
         [Tooltip("Layers to render in reflection. Uncheck small details!")]
         public LayerMask reflectionLayers = -1;

@@ -176,7 +176,7 @@ namespace POTCO.Ocean
                 }
                 planarReflection.waterMaterial = oceanMaterial;  // Uses material instance from above
                 
-                // Optimization: Use defaults from PlanarReflection script (128px, interval 3)
+                // Optimization: Use defaults from PlanarReflection script (256px, interval 2)
                 // Do NOT override them here
 
                 // Exclude Water layer from reflections to prevent double ocean

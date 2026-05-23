@@ -54,6 +54,24 @@ namespace POTCO.Ocean
         [Tooltip("Manual water color (used when time-based color is disabled)")]
         public Color waterColor = new Color(0.729f, 0.729f, 0.729f, 1f);
 
+        [Header("Island Ocean Maps")]
+        [Tooltip("Apply POTCO *_ocean.egg water_color and water_alpha maps to the ocean shader.")]
+        public bool enableIslandOceanMaps = true;
+
+        [Tooltip("Optional profile override. If unset, the nearest discovered island ocean profile is used.")]
+        public IslandOceanProfile overrideIslandOceanProfile;
+
+        [Tooltip("Extra distance beyond an island ocean profile's helper bounds where it can still affect the sea.")]
+        public float islandProfileSearchPadding = 250f;
+
+        [Tooltip("How strongly island color maps replace the base ocean color.")]
+        [Range(0f, 1f)]
+        public float islandColorStrength = 1f;
+
+        [Tooltip("How strongly inverse alpha maps make the ocean transparent.")]
+        [Range(0f, 1f)]
+        public float islandAlphaStrength = 1f;
+
         [Header("Gerstner Waves")]
         [Tooltip("Wave parameters for vertex displacement")]
         public Wave[] waves = new Wave[]
@@ -64,6 +82,7 @@ namespace POTCO.Ocean
         };
 
         private MeshRenderer[] oceanRenderers;
+        private IslandOceanProfile[] islandOceanProfiles = new IslandOceanProfile[0];
         private Color currentWaterColor;
         private Color targetWaterColor;
         private static MaterialPropertyBlock _propBlock;
@@ -74,6 +93,15 @@ namespace POTCO.Ocean
         private static readonly int _UVSpeedBID = Shader.PropertyToID("_UVSpeedB");
         private static readonly int _TimeSecID = Shader.PropertyToID("_TimeSec");
         private static readonly int _WaterColorID = Shader.PropertyToID("_WaterColor");
+        private static readonly int _UseIslandWaterMapsID = Shader.PropertyToID("_UseIslandWaterMaps");
+        private static readonly int _IslandWaterColorTexID = Shader.PropertyToID("_IslandWaterColorTex");
+        private static readonly int _IslandWaterAlphaTexID = Shader.PropertyToID("_IslandWaterAlphaTex");
+        private static readonly int _IslandColorMapUID = Shader.PropertyToID("_IslandColorMapU");
+        private static readonly int _IslandColorMapVID = Shader.PropertyToID("_IslandColorMapV");
+        private static readonly int _IslandAlphaMapUID = Shader.PropertyToID("_IslandAlphaMapU");
+        private static readonly int _IslandAlphaMapVID = Shader.PropertyToID("_IslandAlphaMapV");
+        private static readonly int _IslandColorStrengthID = Shader.PropertyToID("_IslandColorStrength");
+        private static readonly int _IslandAlphaStrengthID = Shader.PropertyToID("_IslandAlphaStrength");
         private static readonly int[] _WaveIDs = { 
             Shader.PropertyToID("_Wave0"), Shader.PropertyToID("_Wave1"), 
             Shader.PropertyToID("_Wave2"), Shader.PropertyToID("_Wave3") 
@@ -89,6 +117,7 @@ namespace POTCO.Ocean
                 _propBlock = new MaterialPropertyBlock();
 
             CollectAllOceanMaterials();
+            CollectIslandOceanProfiles();
 
             // Find SkyboxManager if not assigned
             if (enableTimeBasedColor && skyboxManager == null)
@@ -176,6 +205,7 @@ namespace POTCO.Ocean
         public void RefreshMaterials()
         {
             CollectAllOceanMaterials();
+            CollectIslandOceanProfiles();
         }
 
         void Update()
@@ -208,6 +238,9 @@ namespace POTCO.Ocean
             _propBlock.SetFloat(_TimeSecID, Time.time);
             _propBlock.SetColor(_WaterColorID, currentWaterColor);
 
+            IslandOceanProfile activeIslandProfile = GetActiveIslandOceanProfile();
+            ApplyIslandOceanProfile(activeIslandProfile);
+
             // Set wave parameters
             for (int i = 0; i < waves.Length && i < 4; i++)
             {
@@ -228,6 +261,128 @@ namespace POTCO.Ocean
                     oceanRenderers[i].SetPropertyBlock(_propBlock);
                 }
             }
+        }
+
+        void CollectIslandOceanProfiles()
+        {
+            if (!enableIslandOceanMaps)
+            {
+                islandOceanProfiles = new IslandOceanProfile[0];
+                return;
+            }
+
+            DiscoverIslandOceanProfilesFromMarkers();
+
+            IslandOceanProfile[] discovered = FindObjectsByType<IslandOceanProfile>(FindObjectsSortMode.None);
+            List<IslandOceanProfile> validProfiles = new List<IslandOceanProfile>(discovered.Length);
+
+            for (int i = 0; i < discovered.Length; i++)
+            {
+                IslandOceanProfile profile = discovered[i];
+                if (profile == null || !profile.gameObject.activeInHierarchy)
+                    continue;
+
+                if (profile.RefreshFromChildren())
+                    validProfiles.Add(profile);
+            }
+
+            islandOceanProfiles = validProfiles.ToArray();
+        }
+
+        void DiscoverIslandOceanProfilesFromMarkers()
+        {
+            MeshRenderer[] allRenderers = FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None);
+            for (int i = 0; i < allRenderers.Length; i++)
+            {
+                MeshRenderer renderer = allRenderers[i];
+                if (renderer == null || !IsWaterColorMarker(renderer.transform.name))
+                    continue;
+
+                Transform host = renderer.transform.parent != null ? renderer.transform.parent : renderer.transform;
+                if (host.GetComponentInParent<IslandOceanProfile>() == null)
+                    host.gameObject.AddComponent<IslandOceanProfile>();
+            }
+        }
+
+        static bool IsWaterColorMarker(string objectName)
+        {
+            return string.Equals(objectName, "water_color", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        IslandOceanProfile GetActiveIslandOceanProfile()
+        {
+            if (!enableIslandOceanMaps)
+                return null;
+
+            if (overrideIslandOceanProfile != null && overrideIslandOceanProfile.isActiveAndEnabled)
+            {
+                overrideIslandOceanProfile.RefreshFromChildren();
+                return overrideIslandOceanProfile.HasAnyMap ? overrideIslandOceanProfile : null;
+            }
+
+            if (islandOceanProfiles == null || islandOceanProfiles.Length == 0)
+                return null;
+
+            Vector3 samplePosition = GetIslandProfileSamplePosition();
+            IslandOceanProfile bestProfile = null;
+            float bestDistance = float.MaxValue;
+
+            for (int i = 0; i < islandOceanProfiles.Length; i++)
+            {
+                IslandOceanProfile profile = islandOceanProfiles[i];
+                if (profile == null || !profile.isActiveAndEnabled || !profile.HasAnyMap)
+                    continue;
+
+                float distance = profile.HorizontalDistanceTo(samplePosition);
+                if (distance <= islandProfileSearchPadding && distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    bestProfile = profile;
+                }
+            }
+
+            return bestProfile;
+        }
+
+        Vector3 GetIslandProfileSamplePosition()
+        {
+            OceanFollowController followController = GetComponent<OceanFollowController>();
+            if (followController != null && followController.followTarget != null)
+                return followController.followTarget.position;
+
+            OceanGrid oceanGrid = GetComponent<OceanGrid>();
+            if (oceanGrid != null && oceanGrid.followTarget != null)
+                return oceanGrid.followTarget.position;
+
+            Camera mainCamera = Camera.main;
+            return mainCamera != null ? mainCamera.transform.position : transform.position;
+        }
+
+        void ApplyIslandOceanProfile(IslandOceanProfile profile)
+        {
+            if (profile == null)
+            {
+                _propBlock.SetFloat(_UseIslandWaterMapsID, 0f);
+                _propBlock.SetTexture(_IslandWaterColorTexID, Texture2D.whiteTexture);
+                _propBlock.SetTexture(_IslandWaterAlphaTexID, Texture2D.blackTexture);
+                _propBlock.SetVector(_IslandColorMapUID, Vector4.zero);
+                _propBlock.SetVector(_IslandColorMapVID, Vector4.zero);
+                _propBlock.SetVector(_IslandAlphaMapUID, Vector4.zero);
+                _propBlock.SetVector(_IslandAlphaMapVID, Vector4.zero);
+                _propBlock.SetFloat(_IslandColorStrengthID, 0f);
+                _propBlock.SetFloat(_IslandAlphaStrengthID, 0f);
+                return;
+            }
+
+            _propBlock.SetFloat(_UseIslandWaterMapsID, 1f);
+            _propBlock.SetTexture(_IslandWaterColorTexID, profile.WaterColorTexture != null ? profile.WaterColorTexture : Texture2D.whiteTexture);
+            _propBlock.SetTexture(_IslandWaterAlphaTexID, profile.WaterAlphaTexture != null ? profile.WaterAlphaTexture : Texture2D.blackTexture);
+            _propBlock.SetVector(_IslandColorMapUID, profile.ColorMapU);
+            _propBlock.SetVector(_IslandColorMapVID, profile.ColorMapV);
+            _propBlock.SetVector(_IslandAlphaMapUID, profile.AlphaMapU);
+            _propBlock.SetVector(_IslandAlphaMapVID, profile.AlphaMapV);
+            _propBlock.SetFloat(_IslandColorStrengthID, profile.WaterColorTexture != null ? Mathf.Clamp01(islandColorStrength) : 0f);
+            _propBlock.SetFloat(_IslandAlphaStrengthID, profile.WaterAlphaTexture != null ? Mathf.Clamp01(islandAlphaStrength) : 0f);
         }
 
         /// <summary>
