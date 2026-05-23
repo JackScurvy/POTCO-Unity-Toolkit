@@ -13,6 +13,10 @@ namespace POTCO
         public System.Collections.Generic.List<string> interactInto = new System.Collections.Generic.List<string>();
         public System.Collections.Generic.List<string> interact = new System.Collections.Generic.List<string>();
         public System.Collections.Generic.List<string> interactOutof = new System.Collections.Generic.List<string>();
+        public System.Collections.Generic.List<string> noticeIdle = new System.Collections.Generic.List<string>();
+        public System.Collections.Generic.List<string> notice1 = new System.Collections.Generic.List<string>();
+        public System.Collections.Generic.List<string> notice2 = new System.Collections.Generic.List<string>();
+        public System.Collections.Generic.List<string> greeting = new System.Collections.Generic.List<string>();
 
         // Prop attachment
         public System.Collections.Generic.List<PropData> props = new System.Collections.Generic.List<PropData>();

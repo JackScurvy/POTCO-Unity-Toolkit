@@ -132,6 +132,8 @@ namespace POTCO
 
             // Fix "100s of hidden clothing pieces" lag
             PerformMeshOptimization();
+
+            playerTransform = FindPlayer();
         }
 
         private void PerformMeshOptimization()
@@ -190,6 +192,12 @@ namespace POTCO
         #region Update Loop
         private void Update()
         {
+            if (npcData != null && npcData.isStationary)
+            {
+                UpdateStationaryNpc();
+                return;
+            }
+
             // Prevent "CharacterController.Move called on inactive controller" error
             // This happens if another script (like ShipController) disables the controller
             if (controller == null || !controller.enabled) return;
@@ -218,58 +226,7 @@ namespace POTCO
                 return;
             }
 
-            // Re-find player if lost (check every 60 frames for performance)
-            if (Time.frameCount % 60 == 0 && playerTransform == null)
-            {
-                playerTransform = FindPlayer();
-            }
-
-            // Lock position for stationary NPCs
-            if (npcData != null && npcData.isStationary)
-            {
-                if (!positionLocked)
-                {
-                    // First time detecting stationary - lock current position and rotation
-                    lockedPosition = transform.position;
-                    lockedRotation = transform.rotation;
-                    positionLocked = true;
-
-                    // Disable CharacterController to prevent collision-based movement
-                    if (controller != null && controller.enabled)
-                    {
-                        controller.enabled = false;
-                    }
-
-                    // Also check for and disable any Rigidbody components
-                    Rigidbody rb = GetComponent<Rigidbody>();
-                    if (rb != null)
-                    {
-                        rb.isKinematic = true;
-                        rb.linearVelocity = Vector3.zero;
-                        rb.angularVelocity = Vector3.zero;
-                    }
-                }
-                
-                // Stationary NPCs still handle FSM state transitions but don't move or rotate
-                // Optimization: Logic only runs if needed
-                switch (currentState)
-                {
-                    case NPCState.LandRoam:
-                        if (playerTransform != null && Time.frameCount % 10 == 0 && ShouldNoticePlayer())
-                        {
-                            ChangeState(NPCState.Notice);
-                        }
-                        break;
-                    case NPCState.Notice:
-                        UpdateNotice();
-                        break;
-                    case NPCState.Greeting:
-                        UpdateGreeting();
-                        break;
-                }
-
-                return; // Skip movement and gravity
-            }
+            RefreshPlayerReference();
 
             // Handle FSM
             switch (currentState)
@@ -308,6 +265,76 @@ namespace POTCO
             }
         }
         #endregion
+
+        private void UpdateStationaryNpc()
+        {
+            if (!spawnPositionInitialized)
+            {
+                InitializeStationarySpawnPosition();
+            }
+
+            RefreshPlayerReference();
+            EnsureStationaryLocked();
+
+            switch (currentState)
+            {
+                case NPCState.LandRoam:
+                    if (playerTransform != null && ShouldNoticePlayer())
+                    {
+                        ChangeState(NPCState.Notice);
+                    }
+                    break;
+                case NPCState.Notice:
+                    UpdateNotice();
+                    break;
+                case NPCState.Greeting:
+                    UpdateGreeting();
+                    break;
+            }
+
+            if (positionLocked)
+            {
+                transform.SetPositionAndRotation(lockedPosition, lockedRotation);
+            }
+        }
+
+        private void InitializeStationarySpawnPosition()
+        {
+            spawnPosition = transform.position;
+            currentWaypoint = spawnPosition;
+            isIdleAtWaypoint = true;
+            spawnPositionInitialized = true;
+            DebugLogger.LogNPCController($"[{gameObject.name}] Stationary spawn position initialized: {spawnPosition}");
+        }
+
+        private void EnsureStationaryLocked()
+        {
+            velocity.x = 0f;
+            velocity.z = 0f;
+            currentTurnDirection = 0f;
+
+            if (positionLocked)
+            {
+                return;
+            }
+
+            lockedPosition = transform.position;
+            lockedRotation = transform.rotation;
+            positionLocked = true;
+
+            if (controller != null && controller.enabled)
+            {
+                controller.enabled = false;
+            }
+
+            Rigidbody rb = GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.isKinematic = true;
+                rb.linearVelocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
+            }
+        }
 
         #region FSM States
         /// <summary>
@@ -628,6 +655,21 @@ namespace POTCO
         #endregion
 
         #region Utility
+        private void RefreshPlayerReference()
+        {
+            if (playerTransform != null && playerTransform.gameObject.activeInHierarchy)
+            {
+                return;
+            }
+
+            if (playerTransform == null && Time.frameCount % 60 != 0)
+            {
+                return;
+            }
+
+            playerTransform = FindPlayer();
+        }
+
         private Transform FindPlayer()
         {
             GameObject player = GameObject.FindGameObjectWithTag("Player");

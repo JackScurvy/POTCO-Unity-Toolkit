@@ -169,6 +169,18 @@ namespace POTCO
                 case "interactOutof":
                     animSet.interactOutof.Add(value);
                     break;
+                case "noticeIdle":
+                    animSet.noticeIdle.Add(value);
+                    break;
+                case "notice1":
+                    animSet.notice1.Add(value);
+                    break;
+                case "notice2":
+                    animSet.notice2.Add(value);
+                    break;
+                case "greeting":
+                    animSet.greeting.Add(value);
+                    break;
                 case "props":
                     // Props are model paths
                     if (value.StartsWith("models/"))
@@ -242,6 +254,10 @@ namespace POTCO
                 Debug.Log($"  InteractInto: {string.Join(", ", kvp.Value.interactInto)}");
                 Debug.Log($"  Interact: {string.Join(", ", kvp.Value.interact)}");
                 Debug.Log($"  InteractOutof: {string.Join(", ", kvp.Value.interactOutof)}");
+                Debug.Log($"  NoticeIdle: {string.Join(", ", kvp.Value.noticeIdle)}");
+                Debug.Log($"  Notice1: {string.Join(", ", kvp.Value.notice1)}");
+                Debug.Log($"  Notice2: {string.Join(", ", kvp.Value.notice2)}");
+                Debug.Log($"  Greeting: {string.Join(", ", kvp.Value.greeting)}");
                 Debug.Log($"  Props: {kvp.Value.props.Count} prop(s)");
             }
         }

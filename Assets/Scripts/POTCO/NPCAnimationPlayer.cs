@@ -27,6 +27,7 @@ namespace POTCO
         [SerializeField] private AnimationClip walkClip;
         [SerializeField] private AnimationClip greetingClip;
         [SerializeField] private AnimationClip noticeClip;
+        [SerializeField] private AnimationClip noticeClip2;
         [SerializeField] private AnimationClip spinLeftClip;
         [SerializeField] private AnimationClip spinRightClip;
 
@@ -51,6 +52,7 @@ namespace POTCO
         private float intoLookStartTime = 0f;
         private bool isPlayingOutof = false;
         private float outofStartTime = 0f;
+        private string activeNoticeAnimation = "";
 
         // def_ bone protection system - REMOVED (no longer needed - animations don't touch def_ bones)
 
@@ -209,6 +211,10 @@ namespace POTCO
             spinLeftClip = FindAndLoadClip("spin_left", phases, searchPaths, customModelPrefix);
             spinRightClip = FindAndLoadClip("spin_right", phases, searchPaths, customModelPrefix);
 
+            string effectiveGreetingAnimation = npcData != null ? npcData.greetingAnimation : "";
+            string effectiveNoticeAnimation1 = npcData != null ? npcData.noticeAnimation1 : "";
+            string effectiveNoticeAnimation2 = npcData != null ? npcData.noticeAnimation2 : "";
+
             // Load AnimSet from CustomAnims.py
             if (npcData != null && !string.IsNullOrEmpty(npcData.animSet) && npcData.animSet != "default")
             {
@@ -223,6 +229,10 @@ namespace POTCO
                     DebugLogger.LogNPCAnimation($"   InteractInto: {string.Join(", ", animData.interactInto)}");
                     DebugLogger.LogNPCAnimation($"   Interact: {string.Join(", ", animData.interact)}");
                     DebugLogger.LogNPCAnimation($"   InteractOutof: {string.Join(", ", animData.interactOutof)}");
+                    DebugLogger.LogNPCAnimation($"   NoticeIdle: {string.Join(", ", animData.noticeIdle)}");
+                    DebugLogger.LogNPCAnimation($"   Notice1: {string.Join(", ", animData.notice1)}");
+                    DebugLogger.LogNPCAnimation($"   Notice2: {string.Join(", ", animData.notice2)}");
+                    DebugLogger.LogNPCAnimation($"   Greeting: {string.Join(", ", animData.greeting)}");
                     DebugLogger.LogNPCAnimation($"   Props: {animData.props.Count}");
 
                     // Load animations from CustomAnimData
@@ -242,6 +252,31 @@ namespace POTCO
                     {
                         animSetOutofLook = FindAndLoadClip(animData.interactOutof[0], phases, searchPaths, customModelPrefix);
                     }
+                    if (animData.noticeIdle.Count > 0)
+                    {
+                        AnimationClip noticeIdleClip = FindAndLoadClip(animData.noticeIdle[0], phases, searchPaths, customModelPrefix);
+                        if (noticeIdleClip != null)
+                        {
+                            animSetLookIdle = noticeIdleClip;
+                        }
+                    }
+
+                    if (animData.notice1.Count > 0)
+                    {
+                        effectiveNoticeAnimation1 = animData.notice1[0];
+                    }
+                    if (animData.notice2.Count > 0)
+                    {
+                        effectiveNoticeAnimation2 = animData.notice2[0];
+                    }
+                    if (animData.greeting.Count > 0)
+                    {
+                        effectiveGreetingAnimation = animData.greeting[0];
+                    }
+
+                    npcData.noticeAnimation1 = effectiveNoticeAnimation1;
+                    npcData.noticeAnimation2 = effectiveNoticeAnimation2;
+                    npcData.greetingAnimation = effectiveGreetingAnimation;
 
                     // Check if NPC should be stationary (has AnimSet variations)
                     if (animSetIdle != null || animSetIntoLook != null || animSetLookIdle != null || animSetOutofLook != null)
@@ -265,14 +300,19 @@ namespace POTCO
             // Load optional greeting and notice animations
             if (npcData != null)
             {
-                if (!string.IsNullOrEmpty(npcData.greetingAnimation))
+                if (!string.IsNullOrEmpty(effectiveGreetingAnimation))
                 {
-                    greetingClip = FindAndLoadClip(npcData.greetingAnimation, phases, searchPaths, customModelPrefix);
+                    greetingClip = FindAndLoadClip(effectiveGreetingAnimation, phases, searchPaths, customModelPrefix);
                 }
 
-                if (!string.IsNullOrEmpty(npcData.noticeAnimation1))
+                if (!string.IsNullOrEmpty(effectiveNoticeAnimation1))
                 {
-                    noticeClip = FindAndLoadClip(npcData.noticeAnimation1, phases, searchPaths, customModelPrefix);
+                    noticeClip = FindAndLoadClip(effectiveNoticeAnimation1, phases, searchPaths, customModelPrefix);
+                }
+
+                if (!string.IsNullOrEmpty(effectiveNoticeAnimation2))
+                {
+                    noticeClip2 = FindAndLoadClip(effectiveNoticeAnimation2, phases, searchPaths, customModelPrefix);
                 }
             }
 
@@ -347,6 +387,13 @@ namespace POTCO
                 DebugLogger.LogNPCAnimation($"   Added 'notice' clip to RuntimeAnimatorPlayer");
             }
 
+            if (noticeClip2 != null)
+            {
+                animComponent.AddClip(noticeClip2, "notice_2");
+                animComponent.SetWrapMode("notice_2", WrapMode.Once);
+                DebugLogger.LogNPCAnimation($"   Added 'notice_2' clip to RuntimeAnimatorPlayer");
+            }
+
             DebugLogger.LogNPCAnimation($"✅ RuntimeAnimatorPlayer initialized");
 
             // Check if we have minimum required animations
@@ -359,7 +406,7 @@ namespace POTCO
                 DebugLogger.LogNPCAnimation($"   Idle: {(idleClip != null ? "✓" : "✗")}");
                 DebugLogger.LogNPCAnimation($"   Walk: {(walkClip != null ? "✓" : "✗")}");
                 DebugLogger.LogNPCAnimation($"   Greeting: {(greetingClip != null ? "✓" : "✗")}");
-                DebugLogger.LogNPCAnimation($"   Notice: {(noticeClip != null ? "✓" : "✗")}");
+                DebugLogger.LogNPCAnimation($"   Notice: {(noticeClip != null || noticeClip2 != null ? "✓" : "✗")}");
             }
             else
             {
@@ -572,6 +619,7 @@ namespace POTCO
                         hasPlayedGreeting = false;
                         hasPlayedIntoLook = false;
                         isPlayingOutof = false;
+                        activeNoticeAnimation = "";
                     }
                     else
                     {
@@ -605,6 +653,7 @@ namespace POTCO
                             isPlayingOutof = false;
                         }
                         hasPlayedGreeting = false;
+                        activeNoticeAnimation = "";
                     }
                     break;
 
@@ -647,9 +696,9 @@ namespace POTCO
                         {
                             targetAnim = "animset_look_idle";
                         }
-                        else if (noticeClip != null && currentAnim != "notice")
+                        else if (HasNoticeAnimation())
                         {
-                            targetAnim = "notice";
+                            targetAnim = GetNoticeAnimation();
                         }
                         else
                         {
@@ -712,6 +761,30 @@ namespace POTCO
         private string GetIdleAnimation()
         {
             return animSetIdle != null ? "animset_idle" : "idle";
+        }
+
+        private bool HasNoticeAnimation()
+        {
+            return noticeClip != null || noticeClip2 != null;
+        }
+
+        private string GetNoticeAnimation()
+        {
+            if (!string.IsNullOrEmpty(activeNoticeAnimation))
+            {
+                return activeNoticeAnimation;
+            }
+
+            if (noticeClip != null && noticeClip2 != null)
+            {
+                activeNoticeAnimation = Random.value < 0.5f ? "notice" : "notice_2";
+            }
+            else
+            {
+                activeNoticeAnimation = noticeClip != null ? "notice" : "notice_2";
+            }
+
+            return activeNoticeAnimation;
         }
 
         private void PlayAnimation(string animName)

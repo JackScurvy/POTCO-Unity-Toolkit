@@ -28,8 +28,8 @@ namespace POTCO
         private int currentClipIndex = -1;
         private bool isInitialized = false;
 
-        [Tooltip("Rebind the Animator before playback. Disable for animation roots that intentionally preserve unanimated child transforms.")]
-        public bool rebindBeforePlayback = true;
+        [Tooltip("Rebind the Animator before playback. Enable only for animation roots that explicitly need a bind-pose reset before clips start.")]
+        public bool rebindBeforePlayback = false;
 
         // Crossfade tracking
         private Coroutine crossfadeCoroutine = null;
@@ -265,8 +265,9 @@ namespace POTCO
             float targetWeight = mixer.GetInputWeight(targetIndex);
             if (targetWeight > 0.9f)
             {
-                // Already playing this animation, just ensure it's at full weight
-                Play(clipName);
+                // Already playing this animation. Do not restart/rebind, or transitions can flash bind pose.
+                currentClipName = clipName;
+                currentClipIndex = targetIndex;
                 return;
             }
 
