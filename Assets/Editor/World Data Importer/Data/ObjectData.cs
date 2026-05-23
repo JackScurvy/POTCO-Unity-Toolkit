@@ -34,6 +34,7 @@ namespace WorldDataImporter.Data
         public string npcAnimSet;       // Animation set to apply
         public Vector3? gridPos;        // Absolute world position (GridPos)
         public bool hasPos;             // Track if Pos was set
+        public bool npcHprHasPitchOrRoll; // Track world-space HPR corrections for GridPos-only NPCs
         public bool isReadyForNPCSpawn; // Track if all NPC properties are loaded
 
         // NPC AI properties (for runtime behavior)

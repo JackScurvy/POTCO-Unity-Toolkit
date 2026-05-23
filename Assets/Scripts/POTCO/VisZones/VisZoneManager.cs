@@ -23,10 +23,6 @@ namespace POTCO.VisZones
         [SerializeField]
         private string currentZone = "";
 
-        [Tooltip("Last reported zone candidates; POTCO visibility uses one current zone")]
-        [SerializeField]
-        private List<string> currentPlayerZones = new List<string>();
-
         [Tooltip("Zones currently visible")]
         [SerializeField]
         private List<string> currentlyVisibleZones = new List<string>();
@@ -206,7 +202,6 @@ namespace POTCO.VisZones
                     {
                         volume.zoneName = section.zoneName;
                         volume.zoneCollider = resolvedCollider;
-                        volume.sectionRoot = section;
                     }
                 }
             }
@@ -214,7 +209,7 @@ namespace POTCO.VisZones
 
         private Collider ResolveZoneCollider(VisZoneSection section)
         {
-            if (TryPrepareZoneCollider(section.zoneCollider, section.zoneName, section, out Collider preparedCollider))
+            if (TryPrepareZoneCollider(section.zoneCollider, section.zoneName, out Collider preparedCollider))
             {
                 return preparedCollider;
             }
@@ -232,7 +227,7 @@ namespace POTCO.VisZones
                     continue;
 
                 Collider candidate = volume.zoneCollider != null ? volume.zoneCollider : volume.GetComponent<Collider>();
-                if (TryPrepareZoneCollider(candidate, section.zoneName, section, out preparedCollider))
+                if (TryPrepareZoneCollider(candidate, section.zoneName, out preparedCollider))
                 {
                     return preparedCollider;
                 }
@@ -247,7 +242,7 @@ namespace POTCO.VisZones
                 if (collider.gameObject.name != expectedName)
                     continue;
 
-                if (TryPrepareZoneCollider(collider, section.zoneName, section, out preparedCollider))
+                if (TryPrepareZoneCollider(collider, section.zoneName, out preparedCollider))
                 {
                     return preparedCollider;
                 }
@@ -256,7 +251,7 @@ namespace POTCO.VisZones
             return null;
         }
 
-        private bool TryPrepareZoneCollider(Collider collider, string zoneName, VisZoneSection section, out Collider preparedCollider)
+        private bool TryPrepareZoneCollider(Collider collider, string zoneName, out Collider preparedCollider)
         {
             preparedCollider = null;
 
@@ -285,7 +280,6 @@ namespace POTCO.VisZones
 
             volume.zoneName = zoneName;
             volume.zoneCollider = collider;
-            volume.sectionRoot = section;
 
             preparedCollider = collider;
             return true;
@@ -316,7 +310,6 @@ namespace POTCO.VisZones
             VisZoneVolume volume = zoneObject.AddComponent<VisZoneVolume>();
             volume.zoneName = section.zoneName;
             volume.zoneCollider = collider;
-            volume.sectionRoot = section;
 
             Debug.LogWarning($"[VisZoneManager] Created runtime fallback {zoneObject.name} from Section-{section.zoneName} bounds.");
             return collider;
@@ -370,33 +363,14 @@ namespace POTCO.VisZones
         }
 
         /// <summary>
-        /// Backwards-compatible wrapper. POTCO uses one current VisZone, not a union of overlaps.
-        /// </summary>
-        public void SetCurrentZones(List<string> zoneNames)
-        {
-            currentPlayerZones = new List<string>(zoneNames);
-
-            foreach (string zoneName in zoneNames)
-            {
-                if (visZoneData != null && visZoneData.HasZone(zoneName))
-                {
-                    SetCurrentZone(zoneName);
-                    return;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Update visibility for a specific zone (public for editor use)
+        /// Update visibility for a specific zone.
         /// Implements full POTCO Vis Table algorithm:
         /// - Show/hide zone sections (visTable[Z][0])
         /// - Show/hide object UIDs (visTable[Z][1])
         /// - Show/hide named statics (visTable[Z][2])
         /// </summary>
         /// <param name="zoneName">Zone to update visibility for</param>
-        /// <param name="originalStates">Optional: Dictionary to store original states (for editor preview restoration)</param>
-        /// <param name="originalStaticStates">Optional: Dictionary to store original named static states (for editor preview restoration)</param>
-        public void UpdateVisibilityForZone(string zoneName, Dictionary<VisZoneSection, bool> originalStates = null, Dictionary<GameObject, bool> originalStaticStates = null)
+        public void UpdateVisibilityForZone(string zoneName)
         {
             if (visZoneData == null || string.IsNullOrEmpty(zoneName))
             {
@@ -426,12 +400,6 @@ namespace POTCO.VisZones
             {
                 if (zoneSectionDict.TryGetValue(zone, out VisZoneSection section))
                 {
-                    // Save original state if dictionary provided
-                    if (originalStates != null && !originalStates.ContainsKey(section))
-                    {
-                        originalStates[section] = section.gameObject.activeSelf;
-                    }
-
                     if (!section.IsVisible)
                     {
                         section.Show();
@@ -447,12 +415,6 @@ namespace POTCO.VisZones
             // Hide zones that should NOT be visible
             foreach (var kvp in zoneSectionDict)
             {
-                // Save original state if dictionary provided
-                if (originalStates != null && !originalStates.ContainsKey(kvp.Value))
-                {
-                    originalStates[kvp.Value] = kvp.Value.gameObject.activeSelf;
-                }
-
                 if (!visSet.zones.Contains(kvp.Key))
                 {
                     if (kvp.Value.IsVisible)
@@ -508,12 +470,6 @@ namespace POTCO.VisZones
             {
                 if (namedStaticDict.TryGetValue(staticName, out GameObject obj))
                 {
-                    // Save original state if dictionary provided
-                    if (originalStaticStates != null && !originalStaticStates.ContainsKey(obj))
-                    {
-                        originalStaticStates[obj] = IsObjectVisible(obj);
-                    }
-
                     if (!IsObjectInZoneSection(obj) && !IsObjectVisible(obj))
                     {
                         ShowObject(obj);
@@ -525,12 +481,6 @@ namespace POTCO.VisZones
             // Hide named statics that should NOT be visible
             foreach (var kvp in namedStaticDict)
             {
-                // Save original state if dictionary provided
-                if (originalStaticStates != null && !originalStaticStates.ContainsKey(kvp.Value))
-                {
-                    originalStaticStates[kvp.Value] = IsObjectVisible(kvp.Value);
-                }
-
                 if (!visSet.namedStatics.Contains(kvp.Key))
                 {
                     // Check if this static is inside a zone section
@@ -555,104 +505,6 @@ namespace POTCO.VisZones
                          $"  UIDs:  +{uidsShown} -{uidsHidden} ({visSet.objectUIDs.Count} total)\n" +
                          $"  Statics: +{staticsShown} -{staticsHidden} ({visSet.namedStatics.Count} total)");
             }
-        }
-
-        /// <summary>
-        /// Restore zone visibility to original states (for editor preview exit)
-        /// </summary>
-        /// <param name="originalStates">Original section states to restore</param>
-        /// <param name="originalStaticStates">Original named static states to restore</param>
-        public void RestoreVisibilityStates(Dictionary<VisZoneSection, bool> originalStates, Dictionary<GameObject, bool> originalStaticStates)
-        {
-            int sectionsRestored = 0;
-            int staticsRestored = 0;
-
-            // Restore sections
-            foreach (var kvp in originalStates)
-            {
-                if (kvp.Key != null)
-                {
-                    if (kvp.Value)
-                    {
-                        kvp.Key.Show();
-                    }
-                    else
-                    {
-                        kvp.Key.Hide();
-                    }
-                    sectionsRestored++;
-                }
-            }
-
-            // Restore named statics
-            foreach (var kvp in originalStaticStates)
-            {
-                if (kvp.Key != null)
-                {
-                    if (kvp.Value)
-                    {
-                        ShowObject(kvp.Key);
-                    }
-                    else
-                    {
-                        HideObject(kvp.Key);
-                    }
-                    staticsRestored++;
-                }
-            }
-
-            Debug.Log($"[VisZoneManager] Restored {sectionsRestored} sections and {staticsRestored} named statics to original state");
-        }
-
-        /// <summary>
-        /// Update visibility based on current zone (private wrapper for runtime use)
-        /// </summary>
-        private void UpdateVisibility()
-        {
-            UpdateVisibilityForZone(currentZone);
-        }
-
-        /// <summary>
-        /// Update visibility from the first valid candidate. Kept for older editor/runtime callers.
-        /// </summary>
-        private void UpdateVisibilityForMultipleZones()
-        {
-            if (visZoneData == null || currentPlayerZones.Count == 0)
-            {
-                Debug.LogWarning($"[VisZoneManager] Cannot update visibility: visZoneData={visZoneData != null}, zones={currentPlayerZones.Count}");
-                return;
-            }
-
-            foreach (string zoneName in currentPlayerZones)
-            {
-                if (visZoneData.HasZone(zoneName))
-                {
-                    SetCurrentZone(zoneName);
-                    return;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Check if an object is inside a visible zone section
-        /// </summary>
-        private bool IsObjectInVisibleZone(GameObject obj)
-        {
-            Transform current = obj.transform;
-
-            // Walk up the hierarchy to see if any parent is a visible zone section
-            while (current != null)
-            {
-                VisZoneSection section = current.GetComponent<VisZoneSection>();
-                if (section != null)
-                {
-                    return currentlyVisibleZones.Contains(section.zoneName);
-                }
-
-                current = current.parent;
-            }
-
-            return false;
         }
 
         /// <summary>
@@ -793,72 +645,5 @@ namespace POTCO.VisZones
         /// Get list of currently visible zones
         /// </summary>
         public List<string> GetVisibleZones() => new List<string>(currentlyVisibleZones);
-
-        /// <summary>
-        /// Refresh all sections from hierarchy (useful after import or changes)
-        /// </summary>
-        [ContextMenu("Refresh Zone Sections")]
-        public void RefreshZoneSections()
-        {
-            zoneSections.Clear();
-            zoneSections.AddRange(GetComponentsInChildren<VisZoneSection>(true));
-            BuildSectionDictionary();
-            EnsureZoneColliders();
-            Debug.Log($"[VisZoneManager] Refreshed {zoneSections.Count} zone sections");
-        }
-
-        /// <summary>
-        /// Ensure all dictionaries are built (for editor use when Awake hasn't been called)
-        /// </summary>
-        public void EnsureDictionariesBuilt()
-        {
-            if (zoneSectionDict.Count == 0)
-            {
-                BuildSectionDictionary();
-            }
-            if (NeedsZoneColliderRefresh())
-            {
-                EnsureZoneColliders();
-            }
-            if (objectUidDict.Count == 0)
-            {
-                BuildObjectUidDictionary();
-            }
-            if (namedStaticDict.Count == 0)
-            {
-                BuildNamedStaticDictionary();
-            }
-        }
-
-        private bool NeedsZoneColliderRefresh()
-        {
-            foreach (VisZoneSection section in zoneSections)
-            {
-                if (section == null || string.IsNullOrEmpty(section.zoneName))
-                    continue;
-
-                if (section.zoneCollider == null ||
-                    !section.zoneCollider.enabled ||
-                    !section.zoneCollider.isTrigger ||
-                    !section.zoneCollider.gameObject.activeInHierarchy)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private void OnDrawGizmosSelected()
-        {
-            // Draw debug info in editor
-            if (!string.IsNullOrEmpty(currentZone))
-            {
-                // Draw current zone name at scene origin
-                #if UNITY_EDITOR
-                UnityEditor.Handles.Label(transform.position, $"Current Zone: {currentZone}");
-                #endif
-            }
-        }
     }
 }

@@ -595,7 +595,6 @@ namespace WorldDataImporter.Processors
                 // Add VisZoneVolume component
                 VisZoneVolume volume = Undo.AddComponent<VisZoneVolume>(collisionZoneObj);
                 volume.zoneName = zoneName;
-                volume.displayColor = Random.ColorHSV(0f, 1f, 0.5f, 1f, 0.8f, 1f);
 
                 // Add to collision zones dictionary
                 collisionZones[zoneName] = collisionZoneObj.transform;

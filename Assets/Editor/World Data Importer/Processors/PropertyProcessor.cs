@@ -125,6 +125,11 @@ namespace WorldDataImporter.Processors
                     if (currentGO != root)
                     {
                         Vector3 hpr = ParsingUtilities.ParseVector3(val);
+                        if (objectData != null && objectData.objectType == "Townsperson")
+                        {
+                            objectData.npcHprHasPitchOrRoll = Mathf.Abs(hpr.y) > 0.001f || Mathf.Abs(hpr.z) > 0.001f;
+                        }
+
                         currentGO.transform.localEulerAngles = new Vector3(-hpr.z, -hpr.x, -hpr.y);
                     }
                     break;
@@ -761,7 +766,11 @@ namespace WorldDataImporter.Processors
                     DebugLogger.LogNPCImport($"NPC GridPos world placement without parent: {objectData.gridPos.Value}");
                 }
 
-                currentGO.transform.rotation = sourceHprRotation;
+                if (objectData.npcHprHasPitchOrRoll)
+                {
+                    currentGO.transform.rotation = sourceHprRotation;
+                }
+
                 return;
             }
 

@@ -30,7 +30,6 @@ namespace POTCO.VisZones
 
         // Track candidate zones currently overlapping the player.
         private HashSet<string> overlappingZones = new HashSet<string>();
-        private Dictionary<string, Collider> overlappingZoneColliders = new Dictionary<string, Collider>();
         private Dictionary<string, float> overlappingZoneHeights = new Dictionary<string, float>();
 
         private const float CandidateHeightEpsilon = 0.01f;
@@ -134,7 +133,6 @@ namespace POTCO.VisZones
         private void RefreshCandidatesAtCurrentPosition(float radius)
         {
             overlappingZones.Clear();
-            overlappingZoneColliders.Clear();
             overlappingZoneHeights.Clear();
 
             AddRaycastCandidates();
@@ -171,11 +169,11 @@ namespace POTCO.VisZones
 
                 if (TryGetSection(zoneName, out VisZoneSection section))
                 {
-                    AddCandidate(zoneName, col, GetCollisionSurfaceHeight(section, hit.point.y));
+                    AddCandidate(zoneName, GetCollisionSurfaceHeight(section, hit.point.y));
                 }
                 else
                 {
-                    AddCandidate(zoneName, col, hit.point.y);
+                    AddCandidate(zoneName, hit.point.y);
                 }
             }
         }
@@ -202,20 +200,14 @@ namespace POTCO.VisZones
 
                     AddCandidate(
                         section.zoneName,
-                        section.zoneCollider,
                         GetSectionSurfaceHeight(section, detectionBounds, detectionBounds.max.y));
                 }
             }
         }
 
-        private void AddCandidate(string zoneName, Collider zoneCollider, float height)
+        private void AddCandidate(string zoneName, float height)
         {
             overlappingZones.Add(zoneName);
-
-            if (zoneCollider != null)
-            {
-                overlappingZoneColliders[zoneName] = zoneCollider;
-            }
 
             if (!overlappingZoneHeights.TryGetValue(zoneName, out float currentHeight) || height > currentHeight)
             {
