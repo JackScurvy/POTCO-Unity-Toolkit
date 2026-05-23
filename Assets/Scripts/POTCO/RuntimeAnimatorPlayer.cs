@@ -14,7 +14,7 @@ namespace POTCO
     {
         private Animator animator;
         private PlayableGraph playableGraph;
-        private AnimationLayerMixerPlayable mixer;
+        private AnimationMixerPlayable mixer;
 
         // Track all clips and their playable indices
         private Dictionary<string, AnimationClipPlayable> clipPlayables = new Dictionary<string, AnimationClipPlayable>();
@@ -50,6 +50,8 @@ namespace POTCO
                 animator = gameObject.AddComponent<Animator>();
             }
 
+            rebindBeforePlayback = false;
+
             // Disable Animator's controller (we control playback via Playables)
             animator.runtimeAnimatorController = null;
 
@@ -57,8 +59,10 @@ namespace POTCO
             playableGraph = PlayableGraph.Create($"{gameObject.name}_AnimGraph");
             playableGraph.SetTimeUpdateMode(DirectorUpdateMode.GameTime);
 
-            // Create mixer with initial capacity (will grow as clips are added)
-            mixer = AnimationLayerMixerPlayable.Create(playableGraph, 0);
+            // Create a clip mixer with initial capacity (will grow as clips are added).
+            // Layer mixers are for stacked animation layers; ordinary clip transitions need
+            // a normalized clip mixer or interrupted blends can flash bind pose.
+            mixer = AnimationMixerPlayable.Create(playableGraph, 0);
 
             // Connect mixer to Animator
             var output = AnimationPlayableOutput.Create(playableGraph, "Animation", animator);
@@ -238,6 +242,7 @@ namespace POTCO
 
             currentClipName = clipName;
             currentClipIndex = clipIndices[clipName];
+            EvaluateGraphPose();
 
             DebugLogger.LogRuntimeAnimator($"▶️ Playing '{clipName}' on {gameObject.name}");
         }
@@ -339,6 +344,7 @@ namespace POTCO
 
                 currentClipName = toClipName;
                 currentClipIndex = toIndex;
+                EvaluateGraphPose();
                 crossfadeCoroutine = null;
 
                 yield break;
@@ -395,6 +401,9 @@ namespace POTCO
             var toPlayable = clipPlayables[toClipName];
             toPlayable.SetTime(0);
             toPlayable.Play();
+            currentClipName = toClipName;
+            currentClipIndex = toIndex;
+            EvaluateGraphPose();
 
             // Crossfade weights from CURRENT weights (not assuming 1.0 and 0.0)
             // This fixes T-posing when rapidly switching animations
@@ -427,6 +436,7 @@ namespace POTCO
 
             currentClipName = toClipName;
             currentClipIndex = toIndex;
+            EvaluateGraphPose();
 
             crossfadeCoroutine = null;
 
@@ -438,6 +448,14 @@ namespace POTCO
             if (rebindBeforePlayback && animator != null)
             {
                 animator.Rebind();
+            }
+        }
+
+        private void EvaluateGraphPose()
+        {
+            if (playableGraph.IsValid())
+            {
+                playableGraph.Evaluate(0f);
             }
         }
 
@@ -531,12 +549,8 @@ namespace POTCO
 
         private void ApplyTransformMaskToInput(int inputIndex)
         {
-            if (transformMask == null || !mixer.IsValid())
-            {
-                return;
-            }
-
-            mixer.SetLayerMaskFromAvatarMask((uint)inputIndex, transformMask);
+            // AnimationMixerPlayable gives stable clip blending for character locomotion.
+            // Transform masks require AnimationLayerMixerPlayable and are not used by current runtime callers.
         }
 
         private static string GetRelativePath(Transform root, Transform target)
