@@ -572,6 +572,11 @@ public class MaterialHandler
         _textureCacheInitialized = true;
     }
 
+    public static void PrewarmTextureCache()
+    {
+        InitializeTextureCache();
+    }
+
     private Color GetDefaultColorForMaterial(string materialName)
     {
         // Use cache to avoid repeated string operations for same material names

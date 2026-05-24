@@ -44,14 +44,22 @@ public class EggImportStartupPrompt
 
     private static void ImportAllEggFilesWithProgress(int totalFiles)
     {
+        if (totalFiles >= 0)
+        {
+            var settings = EggImporterSettings.Instance;
+            EggBatchImportPlan plan = BuildImportPlanForFiles(GetFilteredEggFiles(settings), settings);
+            ImportFileListWithProgress(plan);
+            return;
+        }
+
         string[] eggFiles = Directory.GetFiles(Application.dataPath, "*.egg", SearchOption.AllDirectories);
         int importedCount = 0;
         
         // Temporarily enable auto-import for this batch operation
-        var settings = EggImporterSettings.Instance;
-        bool originalSetting = settings.autoImportEnabled;
-        settings.autoImportEnabled = true;
-        EditorUtility.SetDirty(settings);
+        var legacySettings = EggImporterSettings.Instance;
+        bool originalSetting = legacySettings.autoImportEnabled;
+        legacySettings.autoImportEnabled = true;
+        EditorUtility.SetDirty(legacySettings);
 
         try
         {
@@ -79,19 +87,14 @@ public class EggImportStartupPrompt
                     AssetDatabase.ImportAsset(relativePath, ImportAssetOptions.ForceUpdate);
                     importedCount++;
 
-                    // Small delay to prevent Unity from freezing
-                    if (importedCount % 5 == 0)
-                    {
-                        System.Threading.Thread.Sleep(100);
-                    }
                 }
             }
         }
         finally
         {
             // Restore original auto-import setting
-            settings.autoImportEnabled = originalSetting;
-            EditorUtility.SetDirty(settings);
+            legacySettings.autoImportEnabled = originalSetting;
+            EditorUtility.SetDirty(legacySettings);
             EditorUtility.ClearProgressBar();
         }
         
@@ -158,51 +161,116 @@ public class EggImportStartupPrompt
     
     public static void ImportAllEggFilesWithProgressAndFilters(EggImporterSettings settings)
     {
-        // Get pre-filtered files to avoid processing excluded files
-        var filteredFiles = GetFilteredEggFiles(settings);
-        
-        // Apply additional filters to determine which files to import
-        var finalFilteredFiles = new System.Collections.Generic.List<string>();
-        for (int i = 0; i < filteredFiles.Count; i++)
+        EggBatchImportPlan plan = BuildImportPlanForFiles(GetFilteredEggFiles(settings), settings);
+        ImportFileListWithProgress(plan);
+    }
+
+    public static EggBatchImportPlan BuildImportPlanForFiles(IEnumerable<string> fullPaths, EggImporterSettings settings)
+    {
+        var candidates = fullPaths != null ? fullPaths.ToList() : new List<string>();
+        var lodIndex = EggLodIndex.FromFilePaths(candidates);
+        var analyses = new Dictionary<string, EggFileAnalysis>(System.StringComparer.OrdinalIgnoreCase);
+        var finalFilteredFiles = new List<string>();
+
+        for (int i = 0; i < candidates.Count; i++)
         {
-            string fullPath = filteredFiles[i];
-            string fileName = Path.GetFileNameWithoutExtension(fullPath).ToLower();
-            string relativePath = "Assets" + fullPath.Substring(Application.dataPath.Length).Replace('\\', '/');
-            
-            // Check footprint filter
-            if (settings.skipFootprints && fileName.EndsWith("_footprint"))
-                continue;
-                
-            // Check animation and skeletal filters
-            try
+            string fullPath = candidates[i];
+            string fileName = Path.GetFileNameWithoutExtension(fullPath).ToLowerInvariant();
+            string relativePath = ToAssetPath(fullPath);
+            bool hasAnalysis = false;
+            EggFileAnalysis analysis = default;
+
+            if (RequiresAnalysisForFilters(settings, fileName))
             {
-                string[] lines = File.ReadAllLines(fullPath);
-                bool isAnimationOnly = IsAnimationOnlyFile(lines);
-                bool hasSkeletalData = HasSkeletalData(lines);
-                
-                if (settings.skipAnimations && isAnimationOnly)
-                    continue;
-                    
-                if (settings.skipSkeletalModels && hasSkeletalData)
-                    continue;
-                    
-                // Check LOD filter
-                if (settings.lodImportMode == EggImporterSettings.LODImportMode.HighestOnly)
+                try
                 {
-                    if (!ShouldImportHighestLODOnly(fileName))
-                        continue;
+                    analysis = EggFileAnalyzer.Analyze(File.ReadAllLines(fullPath));
+                    analyses[relativePath] = analysis;
+                    hasAnalysis = true;
                 }
-                
-                finalFilteredFiles.Add(relativePath);
+                catch
+                {
+                    finalFilteredFiles.Add(relativePath);
+                    continue;
+                }
             }
-            catch
+
+            if (settings.skipAnimations && hasAnalysis && analysis.IsAnimationOnly)
+                continue;
+
+            if (settings.skipSkeletalModels && hasAnalysis && analysis.HasSkeletalData)
+                continue;
+
+            if (settings.lodImportMode == EggImporterSettings.LODImportMode.HighestOnly)
             {
-                // If we can't read the file, include it anyway
-                finalFilteredFiles.Add(relativePath);
+                bool hasSkeletalData = hasAnalysis && analysis.HasSkeletalData;
+                if (!LODFilteringUtility.ShouldImportHighestLODOnly(fileName, hasSkeletalData, lodIndex))
+                    continue;
             }
+
+            finalFilteredFiles.Add(relativePath);
         }
-        
-        ImportFileListWithProgress(finalFilteredFiles.ToArray());
+
+        return new EggBatchImportPlan(finalFilteredFiles.ToArray(), lodIndex, analyses);
+    }
+
+    private static bool RequiresAnalysisForFilters(EggImporterSettings settings, string fileName)
+    {
+        if (settings.skipAnimations || settings.skipSkeletalModels)
+            return true;
+
+        return settings.lodImportMode == EggImporterSettings.LODImportMode.HighestOnly
+            && EggLodIndex.IsNumericLodName(fileName);
+    }
+
+    private static string ToAssetPath(string fullPath)
+    {
+        string normalizedPath = fullPath.Replace('\\', '/');
+        string normalizedDataPath = Application.dataPath.Replace('\\', '/');
+        if (normalizedPath.StartsWith(normalizedDataPath, System.StringComparison.OrdinalIgnoreCase))
+        {
+            return "Assets" + normalizedPath.Substring(normalizedDataPath.Length);
+        }
+
+        return normalizedPath;
+    }
+
+    private static void ImportFileListWithProgress(EggBatchImportPlan plan)
+    {
+        int totalFiles = plan.AssetPaths.Length;
+        EggBatchImportResult result;
+
+        try
+        {
+            result = EggBatchImporter.ImportFiles(plan.AssetPaths, new EggBatchImportOptions
+            {
+                LodIndex = plan.LodIndex,
+                FileAnalyses = plan.CreateAnalysisDictionary(),
+                PrewarmCaches = MaterialHandler.PrewarmTextureCache,
+                ShouldCancel = (relativePath, index, total) =>
+                {
+                    string fileName = Path.GetFileName(relativePath);
+                    return EditorUtility.DisplayCancelableProgressBar(
+                        "Importing Filtered EGG Files",
+                        $"Processing {fileName}... ({index + 1}/{total})",
+                        total > 0 ? (float)index / total : 1f);
+                }
+            });
+        }
+        finally
+        {
+            EditorUtility.ClearProgressBar();
+        }
+
+        string completionMessage = !result.WasCancelled && result.ImportedCount == totalFiles
+            ? $"Successfully imported all {result.ImportedCount} filtered EGG files!"
+            : $"Imported {result.ImportedCount} of {totalFiles} filtered EGG files.";
+
+        EditorUtility.DisplayDialog("Import Complete", completionMessage, "OK");
+
+        // After importing, rebuild all group prefabs to replace empty models
+        DebugLogger.LogEggImporter("Starting automatic group prefab rebuild after EGG import...");
+        RebuildAllGroups();
     }
     
     private static void ImportFileListWithProgress(string[] files)
@@ -233,8 +301,6 @@ public class EggImportStartupPrompt
                     AssetDatabase.ImportAsset(relativePath, ImportAssetOptions.ForceUpdate);
                     importedCount++;
 
-                    if (importedCount % 5 == 0)
-                        System.Threading.Thread.Sleep(100);
                 }
             }
         }
@@ -497,32 +563,12 @@ public class EggImportStartupPrompt
     // Helper methods for filtering (simplified versions of EggImporter methods)
     public static bool IsAnimationOnlyFile(string[] lines)
     {
-        bool hasBundle = false, hasVertices = false, hasPolygons = false;
-        
-        for (int i = 0; i < lines.Length; i++)
-        {
-            string line = lines[i].Trim();
-            if (line.StartsWith("<Bundle>")) hasBundle = true;
-            else if (line.StartsWith("<Vertex>")) hasVertices = true;
-            else if (line.StartsWith("<Polygon>")) hasPolygons = true;
-            
-            if (hasVertices || hasPolygons) return false;
-        }
-        
-        return hasBundle && !hasVertices && !hasPolygons;
+        return EggFileAnalyzer.Analyze(lines).IsAnimationOnly;
     }
     
     public static bool HasSkeletalData(string[] lines)
     {
-        for (int i = 0; i < lines.Length; i++)
-        {
-            string line = lines[i].Trim();
-            if (line.StartsWith("<Joint>")) return true;
-            if (line.Contains("<Scalar> membership")) return true;
-            if (line.StartsWith("<Table>") && i + 1 < lines.Length && 
-                lines[i + 1].ToLower().Contains("joint")) return true;
-        }
-        return false;
+        return EggFileAnalyzer.Analyze(lines).HasSkeletalData;
     }
     
     public static bool ShouldImportHighestLODOnly(string fileName)
@@ -540,6 +586,7 @@ public class EggImportStartupWindow : EditorWindow
     // Smart caching system
     private static string[] cachedEggFiles;
     private static Dictionary<string, (bool isAnimation, bool hasSkeletal)> cachedFileData;
+    private static EggLodIndex cachedLodIndex;
     private static bool cacheInitialized = false;
     private static int cachedFilteredCount = -1;
     private static string lastSettingsHash = "";
@@ -932,6 +979,7 @@ public class EggImportStartupWindow : EditorWindow
         cacheInProgress = true;
         cachedEggFiles = Directory.GetFiles(Application.dataPath, "*.egg", SearchOption.AllDirectories);
         cachedFileData = new Dictionary<string, (bool, bool)>();
+        cachedLodIndex = EggLodIndex.FromFilePaths(cachedEggFiles);
         
         // Use EditorApplication.update to process files gradually
         EditorApplication.update += ProcessCacheIncrementally;
@@ -969,9 +1017,8 @@ public class EggImportStartupWindow : EditorWindow
             try
             {
                 string[] lines = File.ReadAllLines(fullPath);
-                bool isAnimation = EggImportStartupPrompt.IsAnimationOnlyFile(lines);
-                bool hasSkeletal = EggImportStartupPrompt.HasSkeletalData(lines);
-                cachedFileData[fullPath] = (isAnimation, hasSkeletal);
+                EggFileAnalysis analysis = EggFileAnalyzer.Analyze(lines);
+                cachedFileData[fullPath] = (analysis.IsAnimationOnly, analysis.HasSkeletalData);
             }
             catch
             {
@@ -1047,7 +1094,8 @@ public class EggImportStartupWindow : EditorWindow
                 
             if (tempSettings.lodImportMode == EggImporterSettings.LODImportMode.HighestOnly)
             {
-                if (!EggImportStartupPrompt.ShouldImportHighestLODOnly(fileName))
+                bool hasSkeletalData = cachedFileData.TryGetValue(fullPath, out var lodFileData) && lodFileData.hasSkeletal;
+                if (!LODFilteringUtility.ShouldImportHighestLODOnly(fileName, hasSkeletalData, cachedLodIndex))
                     continue;
             }
             

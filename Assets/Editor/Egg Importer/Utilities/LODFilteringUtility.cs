@@ -1,89 +1,173 @@
+using System.Collections.Generic;
 using System.IO;
-using System.Linq;
+using System.Text.RegularExpressions;
 using UnityEngine;
 using POTCO.Editor;
 
+public sealed class EggLodIndex
+{
+    private static readonly Regex NumericLodRegex = new Regex(@"(.+)_(\d+)$", RegexOptions.Compiled);
+    private readonly HashSet<string> fileNames;
+    private readonly Dictionary<string, int> highestNumericLodByBaseName;
+
+    private EggLodIndex(IEnumerable<string> eggFilePaths)
+    {
+        fileNames = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        highestNumericLodByBaseName = new Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase);
+
+        if (eggFilePaths == null) return;
+
+        foreach (string eggFilePath in eggFilePaths)
+        {
+            string fileName = NormalizeFileName(eggFilePath);
+            if (string.IsNullOrEmpty(fileName)) continue;
+
+            fileNames.Add(fileName);
+
+            Match match = NumericLodRegex.Match(fileName);
+            if (!match.Success || !int.TryParse(match.Groups[2].Value, out int lodValue))
+            {
+                continue;
+            }
+
+            string baseName = match.Groups[1].Value;
+            if (!highestNumericLodByBaseName.TryGetValue(baseName, out int currentHighest) || lodValue > currentHighest)
+            {
+                highestNumericLodByBaseName[baseName] = lodValue;
+            }
+        }
+    }
+
+    public static EggLodIndex FromFilePaths(IEnumerable<string> eggFilePaths)
+    {
+        return new EggLodIndex(eggFilePaths);
+    }
+
+    public static EggLodIndex FromProjectFiles()
+    {
+        return new EggLodIndex(Directory.GetFiles(Application.dataPath, "*.egg", SearchOption.AllDirectories));
+    }
+
+    public static bool IsNumericLodName(string fileName)
+    {
+        return NumericLodRegex.IsMatch(NormalizeFileName(fileName));
+    }
+
+    public bool ContainsFileName(string fileName)
+    {
+        return fileNames.Contains(NormalizeFileName(fileName));
+    }
+
+    public bool TryGetHighestNumericLod(string baseName, out int highestLod)
+    {
+        return highestNumericLodByBaseName.TryGetValue(baseName, out highestLod);
+    }
+
+    public static bool TryParseNumericLod(string fileName, out string baseName, out int lodValue)
+    {
+        Match match = NumericLodRegex.Match(NormalizeFileName(fileName));
+        if (match.Success && int.TryParse(match.Groups[2].Value, out lodValue))
+        {
+            baseName = match.Groups[1].Value;
+            return true;
+        }
+
+        baseName = string.Empty;
+        lodValue = 0;
+        return false;
+    }
+
+    private static string NormalizeFileName(string fileNameOrPath)
+    {
+        if (string.IsNullOrEmpty(fileNameOrPath)) return string.Empty;
+        return Path.GetFileNameWithoutExtension(fileNameOrPath.Replace('\\', '/')).ToLowerInvariant();
+    }
+}
+
 public static class LODFilteringUtility
 {
-    public static bool ShouldImportHighestLODOnly(string fileName, bool hasSkeletalData = false)
+    public static bool ShouldImportHighestLODOnly(string fileName, bool hasSkeletalData = false, EggLodIndex lodIndex = null)
     {
-        DebugLogger.LogEggImporter($"🔍 Checking LOD for file: {fileName} (hasSkeletalData: {hasSkeletalData})");
-        
-        // Handle character LODs: _hi/_high, _med/_medium, _low, _super/_superlow (super/superlow is lowest quality)
+        lodIndex ??= EggLodIndex.FromProjectFiles();
+        fileName = Path.GetFileNameWithoutExtension(fileName).ToLowerInvariant();
+
+        if (DebugLogger.IsEggImporterEnabled)
+        {
+            DebugLogger.LogEggImporter($"Checking LOD for file: {fileName} (hasSkeletalData: {hasSkeletalData})");
+        }
+
         if (fileName.EndsWith("_hi") || fileName.EndsWith("_high"))
         {
-            DebugLogger.LogEggImporter($"✅ Importing character hi/high LOD: {fileName}");
-            return true; // Always import highest quality
-        }
-        else if (fileName.EndsWith("_med") || fileName.EndsWith("_medium") || fileName.EndsWith("_low") || fileName.EndsWith("_super") || fileName.EndsWith("_superlow"))
-        {
-            // Check if a higher quality version exists
-            string baseName = fileName;
-            if (fileName.EndsWith("_med")) baseName = fileName.Substring(0, fileName.LastIndexOf("_med"));
-            else if (fileName.EndsWith("_medium")) baseName = fileName.Substring(0, fileName.LastIndexOf("_medium"));
-            else if (fileName.EndsWith("_low")) baseName = fileName.Substring(0, fileName.LastIndexOf("_low"));
-            else if (fileName.EndsWith("_super")) baseName = fileName.Substring(0, fileName.LastIndexOf("_super"));
-            else if (fileName.EndsWith("_superlow")) baseName = fileName.Substring(0, fileName.LastIndexOf("_superlow"));
-            
-            // Check if _hi or _high version exists (prefer _hi over _high)
-            string hiVersion = baseName + "_hi.egg";
-            string highVersion = baseName + "_high.egg";
-            string[] hiFiles = System.IO.Directory.GetFiles(Application.dataPath, hiVersion, System.IO.SearchOption.AllDirectories);
-            string[] highFiles = System.IO.Directory.GetFiles(Application.dataPath, highVersion, System.IO.SearchOption.AllDirectories);
-            
-            if (hiFiles.Length > 0)
+            if (DebugLogger.IsEggImporterEnabled)
             {
-                DebugLogger.LogEggImporter($"🚫 Skipping {fileName} - higher quality version exists: {baseName}_hi");
-                return false;
+                DebugLogger.LogEggImporter($"Importing character hi/high LOD: {fileName}");
             }
-            else if (highFiles.Length > 0)
-            {
-                DebugLogger.LogEggImporter($"🚫 Skipping {fileName} - higher quality version exists: {baseName}_high");
-                return false;
-            }
-        }
-        
-        // Handle distance-based numeric LODs: model_1000, model_2000, etc.
-        // NOTE: Numeric LOD system only applies to animated models with skeletal data
-        // Static props use internal lod_high/lod_medium/lod_low groups instead
-        var numericMatch = System.Text.RegularExpressions.Regex.Match(fileName, @"(.+)_(\d+)$");
-        if (numericMatch.Success && hasSkeletalData)
-        {
-            string baseName = numericMatch.Groups[1].Value;
-            int currentLOD = int.Parse(numericMatch.Groups[2].Value);
 
-            DebugLogger.LogEggImporter($"🔍 Found numeric LOD in skeletal model: {fileName} (base: '{baseName}', number: {currentLOD})");
-            
-            // Find all numeric variants for this model
-            string[] allFiles = System.IO.Directory.GetFiles(Application.dataPath, "*.egg", System.IO.SearchOption.AllDirectories);
-            
-            int highestLOD = currentLOD;
-            foreach (string file in allFiles)
+            return true;
+        }
+
+        if (fileName.EndsWith("_med") || fileName.EndsWith("_medium") || fileName.EndsWith("_low") || fileName.EndsWith("_super") || fileName.EndsWith("_superlow"))
+        {
+            string baseName = StripNamedLodSuffix(fileName);
+
+            if (lodIndex.ContainsFileName(baseName + "_hi"))
             {
-                string fileNameOnly = System.IO.Path.GetFileNameWithoutExtension(file).ToLower();
-                var fileMatch = System.Text.RegularExpressions.Regex.Match(fileNameOnly, @"(.+)_(\d+)$");
-                if (fileMatch.Success && fileMatch.Groups[1].Value == baseName)
+                if (DebugLogger.IsEggImporterEnabled)
                 {
-                    int fileLOD = int.Parse(fileMatch.Groups[2].Value);
-                    if (fileLOD > highestLOD)
-                    {
-                        highestLOD = fileLOD;
-                        DebugLogger.LogEggImporter($"🔍 Found higher LOD: {baseName}_{fileLOD}");
-                    }
+                    DebugLogger.LogEggImporter($"Skipping {fileName} - higher quality version exists: {baseName}_hi");
                 }
+
+                return false;
             }
-            
+
+            if (lodIndex.ContainsFileName(baseName + "_high"))
+            {
+                if (DebugLogger.IsEggImporterEnabled)
+                {
+                    DebugLogger.LogEggImporter($"Skipping {fileName} - higher quality version exists: {baseName}_high");
+                }
+
+                return false;
+            }
+        }
+
+        if (EggLodIndex.TryParseNumericLod(fileName, out string numericBaseName, out int currentLOD) && hasSkeletalData)
+        {
+            if (DebugLogger.IsEggImporterEnabled)
+            {
+                DebugLogger.LogEggImporter($"Found numeric LOD in skeletal model: {fileName} (base: '{numericBaseName}', number: {currentLOD})");
+            }
+
+            int highestLOD = lodIndex.TryGetHighestNumericLod(numericBaseName, out int indexedHighestLOD)
+                ? indexedHighestLOD
+                : currentLOD;
+
             if (currentLOD < highestLOD)
             {
-                DebugLogger.LogEggImporter($"🚫 Skipping {fileName} - higher numeric LOD exists: {baseName}_{highestLOD}");
+                if (DebugLogger.IsEggImporterEnabled)
+                {
+                    DebugLogger.LogEggImporter($"Skipping {fileName} - higher numeric LOD exists: {numericBaseName}_{highestLOD}");
+                }
+
                 return false;
             }
-            else
+
+            if (DebugLogger.IsEggImporterEnabled)
             {
-                DebugLogger.LogEggImporter($"✅ Importing highest numeric LOD: {fileName}");
+                DebugLogger.LogEggImporter($"Importing highest numeric LOD: {fileName}");
             }
         }
-        
-        return true; // Import if no higher LOD found
+
+        return true;
+    }
+
+    private static string StripNamedLodSuffix(string fileName)
+    {
+        if (fileName.EndsWith("_medium")) return fileName.Substring(0, fileName.LastIndexOf("_medium"));
+        if (fileName.EndsWith("_superlow")) return fileName.Substring(0, fileName.LastIndexOf("_superlow"));
+        if (fileName.EndsWith("_med")) return fileName.Substring(0, fileName.LastIndexOf("_med"));
+        if (fileName.EndsWith("_low")) return fileName.Substring(0, fileName.LastIndexOf("_low"));
+        if (fileName.EndsWith("_super")) return fileName.Substring(0, fileName.LastIndexOf("_super"));
+        return fileName;
     }
 }

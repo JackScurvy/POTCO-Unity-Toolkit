@@ -45,7 +45,11 @@ namespace POTCO.Editor
         public static bool debugEggImporter
         {
             get => EditorPrefs.GetBool(DEBUG_EGG_IMPORTER_KEY, false);
-            set => EditorPrefs.SetBool(DEBUG_EGG_IMPORTER_KEY, value);
+            set
+            {
+                EditorPrefs.SetBool(DEBUG_EGG_IMPORTER_KEY, value);
+                DebugLogger.ClearCache();
+            }
         }
 
         public static bool debugWorldDataExporter

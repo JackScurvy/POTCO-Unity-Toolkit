@@ -36,6 +36,15 @@ namespace POTCO.Editor
             _cacheInitialized = false;
         }
 
+        public static bool IsEggImporterEnabled
+        {
+            get
+            {
+                if (!_cacheInitialized) InitializeCache();
+                return _cachedEggImporter;
+            }
+        }
+
         /// <summary>
         /// Log message for World Scene Importer
         /// </summary>

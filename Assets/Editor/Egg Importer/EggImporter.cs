@@ -35,47 +35,9 @@ public class EggImporter : ScriptedImporter
     private Dictionary<string, float> _timingData;
     private Stopwatch _timer;
 
-    private struct FileAnalysis
+    private EggFileAnalysis AnalyzeFile(string[] lines)
     {
-        public bool IsAnimationOnly;
-        public bool HasSkeletalData;
-    }
-
-    private FileAnalysis AnalyzeFile(string[] lines)
-    {
-        bool hasBundle = false;
-        bool hasVertices = false;
-        bool hasPolygons = false;
-        bool hasJoints = false;
-
-        for (int i = 0; i < lines.Length; i++)
-        {
-            // Use Span for zero allocations
-            ReadOnlySpan<char> line = lines[i].AsSpan().Trim();
-            
-            if (line.StartsWith("<Bundle>".AsSpan(), StringComparison.Ordinal)) hasBundle = true;
-            else if (line.StartsWith("<Vertex>".AsSpan(), StringComparison.Ordinal)) hasVertices = true;
-            else if (line.StartsWith("<Polygon>".AsSpan(), StringComparison.Ordinal)) hasPolygons = true;
-            else if (line.StartsWith("<Joint>".AsSpan(), StringComparison.Ordinal)) hasJoints = true;
-            // Check for vertex weights (rigged)
-            else if (line.Contains("<Scalar> membership".AsSpan(), StringComparison.Ordinal)) hasJoints = true; 
-            // Check for joint tables
-            else if (line.StartsWith("<Table>".AsSpan(), StringComparison.Ordinal) && i + 1 < lines.Length)
-            {
-                string nextLine = lines[i+1];
-                if (nextLine.IndexOf("joint", StringComparison.OrdinalIgnoreCase) >= 0)
-                    hasJoints = true;
-            }
-            
-            // Optimization: Early exit if we know it's NOT anim only AND we found skeletal data
-            if (hasVertices && hasPolygons && hasJoints)
-            {
-                return new FileAnalysis { IsAnimationOnly = false, HasSkeletalData = true };
-            }
-        }
-
-        bool isAnimOnly = hasBundle && !hasVertices && !hasPolygons;
-        return new FileAnalysis { IsAnimationOnly = isAnimOnly, HasSkeletalData = hasJoints };
+        return EggFileAnalyzer.Analyze(lines);
     }
 
     public override void OnImportAsset(AssetImportContext ctx)
@@ -99,7 +61,9 @@ public class EggImporter : ScriptedImporter
         var lines = File.ReadAllLines(ctx.assetPath);
 
         // Perform single-pass file analysis
-        FileAnalysis analysis = AnalyzeFile(lines);
+        EggFileAnalysis analysis = EggImportSession.TryGetFileAnalysis(ctx.assetPath, out EggFileAnalysis cachedAnalysis)
+            ? cachedAnalysis
+            : AnalyzeFile(lines);
         bool isAnimationOnly = analysis.IsAnimationOnly;
         bool hasSkeletalData = analysis.HasSkeletalData;
 
@@ -718,7 +682,7 @@ public class EggImporter : ScriptedImporter
 
     private bool ShouldImportHighestLODOnly(string fileName, bool hasSkeletalData)
     {
-        return LODFilteringUtility.ShouldImportHighestLODOnly(fileName, hasSkeletalData);
+        return LODFilteringUtility.ShouldImportHighestLODOnly(fileName, hasSkeletalData, EggImportSession.CurrentLodIndex);
     }
     
     private void RecordTiming(string phase, EggImporterSettings settings)

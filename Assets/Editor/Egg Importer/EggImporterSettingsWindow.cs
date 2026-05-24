@@ -1081,7 +1081,6 @@ public class EggImporterSettingsWindow : EditorWindow
     private void ImportAllEggFiles()
     {
         string[] eggFiles = System.IO.Directory.GetFiles(Application.dataPath, "*.egg", SearchOption.AllDirectories);
-        int importedCount = 0;
         
         if (eggFiles.Length == 0)
         {
@@ -1094,25 +1093,36 @@ public class EggImporterSettingsWindow : EditorWindow
             $"Found {eggFiles.Length} EGG files in the project. This may take some time. Continue?", "Yes", "Cancel");
             
         if (!proceed) return;
-        
-        foreach (string fullPath in eggFiles)
+
+        string[] assetPaths = eggFiles
+            .Select(fullPath => ("Assets" + fullPath.Substring(Application.dataPath.Length)).Replace('\\', '/'))
+            .ToArray();
+        EggLodIndex lodIndex = EggLodIndex.FromFilePaths(eggFiles);
+        EggBatchImportResult result;
+
+        try
         {
-            string relativePath = "Assets" + fullPath.Substring(Application.dataPath.Length);
-            relativePath = relativePath.Replace('\\', '/');
-            
-            if (ForceImportEggFile(relativePath))
+            result = EggBatchImporter.ImportFiles(assetPaths, new EggBatchImportOptions
             {
-                importedCount++;
-            }
-            
-            // Show progress
-            EditorUtility.DisplayProgressBar("Importing EGG Files", 
-                $"Importing {Path.GetFileName(relativePath)}...", (float)importedCount / eggFiles.Length);
+                LodIndex = lodIndex,
+                PrewarmCaches = MaterialHandler.PrewarmTextureCache,
+                ShouldCancel = (assetPath, index, total) =>
+                {
+                    EditorUtility.DisplayProgressBar(
+                        "Importing EGG Files",
+                        $"Importing {Path.GetFileName(assetPath)}...",
+                        total > 0 ? (float)index / total : 1f);
+                    return false;
+                }
+            });
         }
-        
-        EditorUtility.ClearProgressBar();
-        DebugLogger.LogEggImporter($"Successfully imported {importedCount} EGG files manually.");
-        EditorUtility.DisplayDialog("Import Complete", $"Successfully imported {importedCount} EGG files.", "OK");
+        finally
+        {
+            EditorUtility.ClearProgressBar();
+        }
+
+        DebugLogger.LogEggImporter($"Successfully imported {result.ImportedCount} EGG files manually.");
+        EditorUtility.DisplayDialog("Import Complete", $"Successfully imported {result.ImportedCount} EGG files.", "OK");
         
         // Refresh statistics after import
         statisticsCached = false;

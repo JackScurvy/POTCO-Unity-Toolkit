@@ -77,7 +77,11 @@ public class GeometryProcessor
         Vector3[] masterVertices, Vector3[] masterNormals, Vector2[] masterUVs, Vector2[] masterUV2s, Color[] masterColors,
         Dictionary<string, Material> materialDict, bool hasSkeletalData, EggJoint rootJoint, GameObject rootBoneObject, Dictionary<string, EggJoint> joints)
     {
-        DebugLogger.LogEggImporter($"Creating mesh for GameObject: {go.name}");
+        bool logEggImporter = DebugLogger.IsEggImporterEnabled;
+        if (logEggImporter)
+        {
+            DebugLogger.LogEggImporter($"Creating mesh for GameObject: {go.name}");
+        }
 
         // Check if we have any triangles
         int totalTriangles = 0;
@@ -92,7 +96,10 @@ public class GeometryProcessor
             return;
         }
 
-        DebugLogger.LogEggImporter($"Total triangles: {totalTriangles}");
+        if (logEggImporter)
+        {
+            DebugLogger.LogEggImporter($"Total triangles: {totalTriangles}");
+        }
 
         // Use different approaches for skinned vs static meshes
         Vector3[] meshVertices;
@@ -235,7 +242,10 @@ public class GeometryProcessor
                 if (hasSkeletalData && rootJoint != null && rootBoneObject != null)
                 {
                     // Skinned mesh: use global indices directly
-                    DebugLogger.LogEggImporter($"Setting triangles for SKINNED submesh {j} ({matName}): {globalTriangles.Count} triangles (global indices)");
+                    if (logEggImporter)
+                    {
+                        DebugLogger.LogEggImporter($"Setting triangles for SKINNED submesh {j} ({matName}): {globalTriangles.Count} triangles (global indices)");
+                    }
                     mesh.SetTriangles(globalTriangles, j, false);
                 }
                 else
@@ -255,14 +265,20 @@ public class GeometryProcessor
                             localTriangles[i] = 0; // Fallback to avoid crashes
                         }
                     }
-                    DebugLogger.LogEggImporter($"Setting triangles for STATIC submesh {j} ({matName}): {localTriangles.Length} triangles (remapped from global indices)");
+                    if (logEggImporter)
+                    {
+                        DebugLogger.LogEggImporter($"Setting triangles for STATIC submesh {j} ({matName}): {localTriangles.Length} triangles (remapped from global indices)");
+                    }
                     mesh.SetTriangles(localTriangles, j, false);
                 }
             }
             if (materialDict.TryGetValue(matName, out Material mat))
             {
                 rendererMaterials.Add(mat);
-                DebugLogger.LogEggImporter($"Added material: {matName}");
+                if (logEggImporter)
+                {
+                    DebugLogger.LogEggImporter($"Added material: {matName}");
+                }
             }
             else
             {
@@ -274,7 +290,10 @@ public class GeometryProcessor
         }
 
         mesh.RecalculateBounds();
-        DebugLogger.LogEggImporter($"Mesh bounds: {mesh.bounds}");
+        if (logEggImporter)
+        {
+            DebugLogger.LogEggImporter($"Mesh bounds: {mesh.bounds}");
+        }
 
         // Only recalculate normals if we don't have them
         if (masterNormals == null || masterNormals.Length == 0)
@@ -699,6 +718,7 @@ public class GeometryProcessor
     public void ParseAllTexturesAndVertices(string[] lines, List<EggVertex> vertexPool, Dictionary<string, string> texturePaths, Dictionary<string, string> alphaPaths, Dictionary<string, string> textureUVNames, Dictionary<string, TextureWrapData> textureWrapModes, ParserUtilities parserUtils)
     {
         _textureRenderData = textureWrapModes;
+        bool logEggImporter = DebugLogger.IsEggImporterEnabled;
 
         // Track current vertex pool context for proper vertex association
         string currentVertexPoolName = "";
@@ -713,7 +733,10 @@ public class GeometryProcessor
                 if (parts.Length > 1)
                 {
                     currentVertexPoolName = parts[1];
-                    DebugLogger.LogEggImporter($"[VertexPool] Entering vertex pool: {currentVertexPoolName}");
+                    if (logEggImporter)
+                    {
+                        DebugLogger.LogEggImporter($"[VertexPool] Entering vertex pool: {currentVertexPoolName}");
+                    }
                 }
             }
             else if (line.StartsWith("<Texture>"))
@@ -751,7 +774,10 @@ public class GeometryProcessor
                                 {
                                     alphaPaths[texName] = alphaPath;
                                     wrapData.hasAlphaFile = true;
-                                    DebugLogger.LogEggImporter($"[AlphaParse] Found alpha-file for {texName}: {alphaPath}");
+                                    if (logEggImporter)
+                                    {
+                                        DebugLogger.LogEggImporter($"[AlphaParse] Found alpha-file for {texName}: {alphaPath}");
+                                    }
                                 }
                             }
                         }
@@ -812,7 +838,10 @@ public class GeometryProcessor
                                 if (isFirstDefinition)
                                 {
                                     textureUVNames[texName] = uvName;
-                                    DebugLogger.LogEggImporter($"[UVName] Texture '{texName}' uses UV channel: {uvName}");
+                                    if (logEggImporter)
+                                    {
+                                        DebugLogger.LogEggImporter($"[UVName] Texture '{texName}' uses UV channel: {uvName}");
+                                    }
                                 }
                             }
                         }
@@ -846,9 +875,12 @@ public class GeometryProcessor
                     }
                     else
                     {
-                        DebugLogger.LogEggImporter($"[TextureDuplicate] Ignoring duplicate definition of texture '{texName}'");
+                        if (logEggImporter)
+                        {
+                            DebugLogger.LogEggImporter($"[TextureDuplicate] Ignoring duplicate definition of texture '{texName}'");
+                        }
                     }
-                    if (wrapData.wrapU != "repeat" || wrapData.wrapV != "repeat")
+                    if (logEggImporter && (wrapData.wrapU != "repeat" || wrapData.wrapV != "repeat"))
                     {
                         DebugLogger.LogEggImporter($"[WrapMode] Texture '{texName}': wrapU={wrapData.wrapU}, wrapV={wrapData.wrapV}");
                     }
@@ -934,7 +966,10 @@ public class GeometryProcessor
                                 string uvName = uvPrefix.Substring(4).Trim(); // Remove "<UV>" prefix
                                 Vector2 namedUV = new Vector2(float.Parse(valueParts[0], CultureInfo.InvariantCulture), float.Parse(valueParts[1], CultureInfo.InvariantCulture));
                                 vert.namedUVs[uvName] = namedUV;
-                                DebugLogger.LogEggImporter($"[UV] Parsed named UV channel '{uvName}': {namedUV}");
+                                if (logEggImporter)
+                                {
+                                    DebugLogger.LogEggImporter($"[UV] Parsed named UV channel '{uvName}': {namedUV}");
+                                }
                             }
                         }
                         else if (attributeLine.StartsWith("<Normal>")) { vert.normal = new Vector3(float.Parse(valueParts[0], CultureInfo.InvariantCulture), float.Parse(valueParts[2], CultureInfo.InvariantCulture), float.Parse(valueParts[1], CultureInfo.InvariantCulture)); }
@@ -962,6 +997,7 @@ public class GeometryProcessor
 
     private void ParsePolygon(string[] lines, ref int i, Dictionary<string, List<int>> subMeshes, List<string> materialNames, EggRenderState inheritedRenderState, bool isInCollisionGroup = false)
     {
+        bool logEggImporter = DebugLogger.IsEggImporterEnabled;
         string polygonTextureRef = "Default-Material";
         int blockEnd = _parserUtils.FindMatchingBrace(lines, i);
         EggRenderState polygonRenderState = inheritedRenderState != null ? inheritedRenderState.Clone() : new EggRenderState();
@@ -995,7 +1031,10 @@ public class GeometryProcessor
             {
                 // Import with transparent collision material
                 polygonTextureRef = "Collision-Material";
-                DebugLogger.LogEggImporter($"🔧 Assigning Collision-Material to polygon");
+                if (logEggImporter)
+                {
+                    DebugLogger.LogEggImporter($"🔧 Assigning Collision-Material to polygon");
+                }
             }
         }
 
@@ -1013,7 +1052,10 @@ public class GeometryProcessor
                     // Validate braces exist and are in correct order
                     if (openBraceIdx == -1 || closeBraceIdx == -1 || closeBraceIdx <= openBraceIdx)
                     {
-                        DebugLogger.LogEggImporter($"[ParsePolygon] WARNING: Invalid TRef format on line {j}: {innerLine}");
+                        if (logEggImporter)
+                        {
+                            DebugLogger.LogEggImporter($"[ParsePolygon] WARNING: Invalid TRef format on line {j}: {innerLine}");
+                        }
                         continue;
                     }
 
@@ -1027,7 +1069,10 @@ public class GeometryProcessor
             {
                 // Multiple textures - join with || separator for multi-texture material
                 polygonTextureRef = string.Join("||", textureRefs);
-                DebugLogger.LogEggImporter($"[MultiTex] Polygon uses {textureRefs.Count} textures: {polygonTextureRef}");
+                if (logEggImporter)
+                {
+                    DebugLogger.LogEggImporter($"[MultiTex] Polygon uses {textureRefs.Count} textures: {polygonTextureRef}");
+                }
             }
             else if (textureRefs.Count == 1)
             {
@@ -1085,7 +1130,10 @@ public class GeometryProcessor
                 // Validate braces exist and are in correct order
                 if (openBraceIdx == -1 || closeBraceIdx == -1 || closeBraceIdx <= openBraceIdx)
                 {
-                    DebugLogger.LogEggImporter($"[ParsePolygon] WARNING: Invalid VertexRef format on line {j}: {innerLine}");
+                    if (logEggImporter)
+                    {
+                        DebugLogger.LogEggImporter($"[ParsePolygon] WARNING: Invalid VertexRef format on line {j}: {innerLine}");
+                    }
                     continue;
                 }
 
@@ -1101,7 +1149,10 @@ public class GeometryProcessor
                     if (refOpenBrace != -1 && refCloseBrace != -1)
                     {
                         referencedVertexPool = valuesString.Substring(refOpenBrace + 1, refCloseBrace - refOpenBrace - 1).Trim();
-                        DebugLogger.LogEggImporter($"[VertexRef] Polygon references vertex pool: {referencedVertexPool}");
+                        if (logEggImporter)
+                        {
+                            DebugLogger.LogEggImporter($"[VertexRef] Polygon references vertex pool: {referencedVertexPool}");
+                        }
                         // Remove the <Ref> part from vertex indices parsing
                         valuesString = valuesString.Substring(0, refStart).Trim();
                     }
@@ -1914,6 +1965,8 @@ public class GeometryProcessor
     public void CreateMasterVertexBuffer(List<EggVertex> vertexPool, out Vector3[] masterVertices,
         out Vector3[] masterNormals, out Vector2[] masterUVs, out Vector2[] masterUV2s, out Color[] masterColors)
     {
+        bool logEggImporter = DebugLogger.IsEggImporterEnabled;
+
         // Create mapping from vertex pool + local index to global index
         vertexPoolMappings.Clear();
         var verticesByPool = new Dictionary<string, List<EggVertex>>();
@@ -1961,7 +2014,10 @@ public class GeometryProcessor
                     namedUVCount++;
                     if (!loggedNamedUVUsage)
                     {
-                        DebugLogger.LogEggImporter($"[UV] Pool '{poolName}': Using named UV '{vertex.namedUVs.First().Key}' as primary UV (no primary UV defined in this pool)");
+                        if (logEggImporter)
+                        {
+                            DebugLogger.LogEggImporter($"[UV] Pool '{poolName}': Using named UV '{vertex.namedUVs.First().Key}' as primary UV (no primary UV defined in this pool)");
+                        }
                         loggedNamedUVUsage = true;
                     }
                 }
@@ -1996,12 +2052,15 @@ public class GeometryProcessor
                 globalIndex++;
             }
 
-            if (namedUVCount > 0)
+            if (logEggImporter && namedUVCount > 0)
             {
                 DebugLogger.LogEggImporter($"[UV] Pool '{poolName}': {namedUVCount}/{poolVertices.Count} vertices using named UV as primary");
             }
 
-            DebugLogger.LogEggImporter($"[VertexPool] Mapped {poolVertices.Count} vertices from pool '{poolName}' to global indices {globalIndex - poolVertices.Count}-{globalIndex - 1}");
+            if (logEggImporter)
+            {
+                DebugLogger.LogEggImporter($"[VertexPool] Mapped {poolVertices.Count} vertices from pool '{poolName}' to global indices {globalIndex - poolVertices.Count}-{globalIndex - 1}");
+            }
         }
 
         masterVertices = masterVerticesList.ToArray();
@@ -2013,8 +2072,12 @@ public class GeometryProcessor
         _cachedMasterColors = masterColors;
 
         int uv2Count = masterUV2s.Count(uv => uv != Vector2.zero);
-        DebugLogger.LogEggImporter($"[VertexPool] Created master vertex buffer with {masterVertices.Length} total vertices from {verticesByPool.Count} vertex pools");
-        if (uv2Count > 0)
+        if (logEggImporter)
+        {
+            DebugLogger.LogEggImporter($"[VertexPool] Created master vertex buffer with {masterVertices.Length} total vertices from {verticesByPool.Count} vertex pools");
+        }
+
+        if (logEggImporter && uv2Count > 0)
         {
             DebugLogger.LogEggImporter($"[UV2] Found {uv2Count} vertices with secondary UV coordinates");
         }
