@@ -12,6 +12,8 @@ public class TextureWrapData
 {
     public string wrapU = "repeat";
     public string wrapV = "repeat";
+    public string minFilter = "unspecified";
+    public string magFilter = "unspecified";
     public string format = "unspecified";
     public string envType = "modulate";
     public string alphaFileChannel = "";
@@ -34,6 +36,8 @@ public class GeometryProcessor
     // Store current asset path for context-aware LOD filtering
     private string _currentAssetPath = "";
     private Dictionary<string, TextureWrapData> _textureRenderData = new Dictionary<string, TextureWrapData>();
+    private Vector3[] _cachedMasterVertices = Array.Empty<Vector3>();
+    private Color[] _cachedMasterColors = Array.Empty<Color>();
 
     // Cache for best available LOD distance to avoid repeated file scans
     // Use asset path as cache key instead of array reference (optimization)
@@ -312,6 +316,11 @@ public class GeometryProcessor
             }
         }
 
+        if (isCollisionGeometry)
+        {
+            AddColliderForCollisionGeometry(go, mesh);
+        }
+
         // Check if this GameObject is inside a "Sails" group - if so, make materials double-sided
         if (IsInsideSailsGroup(go))
         {
@@ -327,6 +336,150 @@ public class GeometryProcessor
         }
 
         ctx.AddObjectToAsset(mesh.name, mesh);
+    }
+
+    public void ConfigureLODGroups(GameObject rootGO)
+    {
+        if (rootGO == null) return;
+        ConfigureLODGroupsRecursive(rootGO.transform);
+    }
+
+    private void ConfigureLODGroupsRecursive(Transform parent)
+    {
+        var lodChildren = new List<Tuple<Transform, PandaEggNodeMetadata>>();
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            Transform child = parent.GetChild(i);
+            PandaEggNodeMetadata metadata = child.GetComponent<PandaEggNodeMetadata>();
+            if (metadata != null && metadata.hasLodDistance)
+            {
+                lodChildren.Add(new Tuple<Transform, PandaEggNodeMetadata>(child, metadata));
+            }
+        }
+
+        if (lodChildren.Count >= 2)
+        {
+            lodChildren.Sort((a, b) =>
+            {
+                int nearCompare = a.Item2.lodNearDistance.CompareTo(b.Item2.lodNearDistance);
+                return nearCompare != 0 ? nearCompare : a.Item2.lodFarDistance.CompareTo(b.Item2.lodFarDistance);
+            });
+
+            var lods = new List<LOD>();
+            var usedTransitions = new HashSet<float>();
+            for (int i = 0; i < lodChildren.Count; i++)
+            {
+                Renderer[] renderers = lodChildren[i].Item1.GetComponentsInChildren<Renderer>(true);
+                if (renderers == null || renderers.Length == 0)
+                {
+                    continue;
+                }
+
+                float transition = Mathf.Clamp(100.0f / Mathf.Max(lodChildren[i].Item2.lodFarDistance, 1.0f), 0.01f, 1.0f);
+                while (usedTransitions.Contains(transition) && transition > 0.01f)
+                {
+                    transition = Mathf.Max(0.01f, transition - 0.001f);
+                }
+
+                usedTransitions.Add(transition);
+                lods.Add(new LOD(transition, renderers));
+            }
+
+            if (lods.Count >= 2)
+            {
+                LODGroup lodGroup = parent.GetComponent<LODGroup>();
+                if (lodGroup == null)
+                {
+                    lodGroup = parent.gameObject.AddComponent<LODGroup>();
+                }
+
+                lodGroup.SetLODs(lods.ToArray());
+                lodGroup.RecalculateBounds();
+                DebugLogger.LogEggImporter($"[LOD] Configured Unity LODGroup on '{parent.name}' with {lods.Count} levels");
+            }
+        }
+
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            ConfigureLODGroupsRecursive(parent.GetChild(i));
+        }
+    }
+
+    private void AddColliderForCollisionGeometry(GameObject go, Mesh mesh)
+    {
+        if (go == null || mesh == null || go.GetComponent<Collider>() != null) return;
+
+        PandaEggNodeMetadata metadata = FindNearestEggMetadata(go.transform);
+        string collisionType = metadata != null && !string.IsNullOrEmpty(metadata.collisionType)
+            ? metadata.collisionType.Trim().ToLowerInvariant()
+            : "polyset";
+
+        Bounds bounds = mesh.bounds;
+        if (collisionType == "sphere")
+        {
+            var collider = go.AddComponent<SphereCollider>();
+            collider.center = bounds.center;
+            collider.radius = Mathf.Max(bounds.extents.x, bounds.extents.y, bounds.extents.z);
+        }
+        else if (collisionType == "tube")
+        {
+            var collider = go.AddComponent<CapsuleCollider>();
+            collider.center = bounds.center;
+
+            Vector3 size = bounds.size;
+            if (size.x >= size.y && size.x >= size.z)
+            {
+                collider.direction = 0;
+                collider.height = size.x;
+                collider.radius = Mathf.Max(size.y, size.z) * 0.5f;
+            }
+            else if (size.z >= size.x && size.z >= size.y)
+            {
+                collider.direction = 2;
+                collider.height = size.z;
+                collider.radius = Mathf.Max(size.x, size.y) * 0.5f;
+            }
+            else
+            {
+                collider.direction = 1;
+                collider.height = size.y;
+                collider.radius = Mathf.Max(size.x, size.z) * 0.5f;
+            }
+        }
+        else if (collisionType == "plane")
+        {
+            var collider = go.AddComponent<BoxCollider>();
+            collider.center = bounds.center;
+            Vector3 size = bounds.size;
+            const float minimumThickness = 0.05f;
+            if (size.x <= size.y && size.x <= size.z) size.x = Mathf.Max(size.x, minimumThickness);
+            else if (size.y <= size.x && size.y <= size.z) size.y = Mathf.Max(size.y, minimumThickness);
+            else size.z = Mathf.Max(size.z, minimumThickness);
+            collider.size = size;
+        }
+        else
+        {
+            var collider = go.AddComponent<MeshCollider>();
+            collider.sharedMesh = mesh;
+            collider.convex = false;
+        }
+    }
+
+    private PandaEggNodeMetadata FindNearestEggMetadata(Transform transform)
+    {
+        Transform current = transform;
+        while (current != null)
+        {
+            PandaEggNodeMetadata metadata = current.GetComponent<PandaEggNodeMetadata>();
+            if (metadata != null && !string.IsNullOrEmpty(metadata.collisionType))
+            {
+                return metadata;
+            }
+
+            current = current.parent;
+        }
+
+        return null;
     }
 
     private SkinnedMeshRenderer SetupSkinnedMeshRenderer(GameObject go, Mesh mesh, Material[] materials,
@@ -634,6 +787,20 @@ public class GeometryProcessor
                                 }
                             }
                         }
+                        else if (innerLine.StartsWith("<Scalar> minfilter"))
+                        {
+                            if (isFirstDefinition)
+                            {
+                                wrapData.minFilter = EggMaterialRenderState.ReadScalarValue(innerLine);
+                            }
+                        }
+                        else if (innerLine.StartsWith("<Scalar> magfilter"))
+                        {
+                            if (isFirstDefinition)
+                            {
+                                wrapData.magFilter = EggMaterialRenderState.ReadScalarValue(innerLine);
+                            }
+                        }
                         else if (innerLine.StartsWith("<Scalar> uv-name"))
                         {
                             // Extract UV channel name from: <Scalar> uv-name { uvNoise }
@@ -809,9 +976,9 @@ public class GeometryProcessor
             {
                 isCollisionPolygon = true;
             }
-            else if (innerLine.StartsWith("<Scalar>"))
+            else if (innerLine.StartsWith("<Scalar>") || innerLine.StartsWith("<BFace>"))
             {
-                EggMaterialRenderState.ApplyScalarLine(polygonRenderState, innerLine);
+                EggMaterialRenderState.ApplyRenderStateLine(polygonRenderState, innerLine);
             }
         }
 
@@ -1010,6 +1177,104 @@ public class GeometryProcessor
         i = blockEnd;
     }
 
+    private void ParsePointPrimitive(string[] lines, ref int i, string currentPath, Dictionary<string, Transform> hierarchyMap)
+    {
+        int blockEnd = _parserUtils.FindMatchingBrace(lines, i);
+        if (blockEnd == -1)
+        {
+            i++;
+            return;
+        }
+
+        if (!hierarchyMap.TryGetValue(currentPath, out Transform targetTransform))
+        {
+            i = blockEnd + 1;
+            return;
+        }
+
+        var pointPrimitive = targetTransform.gameObject.AddComponent<PandaEggPointPrimitive>();
+        pointPrimitive.primitiveName = ExtractEggEntryName(lines[i].Trim(), "<PointLight>");
+
+        var globalIndices = new List<int>();
+        for (int j = i + 1; j < blockEnd; j++)
+        {
+            string line = lines[j].Trim();
+            if (line.StartsWith("<Scalar> thick"))
+            {
+                float thick;
+                if (float.TryParse(EggMaterialRenderState.ReadScalarValue(line), NumberStyles.Float, CultureInfo.InvariantCulture, out thick))
+                {
+                    pointPrimitive.thick = thick;
+                }
+            }
+            else if (line.StartsWith("<Scalar> perspective"))
+            {
+                pointPrimitive.perspective = ParseEggBool(EggMaterialRenderState.ReadScalarValue(line));
+            }
+            else if (line.StartsWith("<VertexRef>"))
+            {
+                int vertexRefEnd = _parserUtils.FindMatchingBrace(lines, j);
+                ParseVertexRefGlobalIndices(lines, j, vertexRefEnd, globalIndices);
+                if (vertexRefEnd > j) j = vertexRefEnd;
+            }
+        }
+
+        var points = new List<Vector3>(globalIndices.Count);
+        var colors = new List<Color>(globalIndices.Count);
+        for (int j = 0; j < globalIndices.Count; j++)
+        {
+            int index = globalIndices[j];
+            if (index < 0 || index >= _cachedMasterVertices.Length)
+            {
+                continue;
+            }
+
+            points.Add(_cachedMasterVertices[index]);
+            colors.Add(index < _cachedMasterColors.Length ? _cachedMasterColors[index] : Color.white);
+        }
+
+        pointPrimitive.points = points.ToArray();
+        pointPrimitive.colors = colors.ToArray();
+        i = blockEnd + 1;
+    }
+
+    private void ParseVertexRefGlobalIndices(string[] lines, int vertexRefStart, int vertexRefEnd, List<int> output)
+    {
+        if (output == null) return;
+
+        string valuesString = ReadEggBlockValue(lines, vertexRefStart, vertexRefEnd);
+        string referencedVertexPool = "default";
+        int refStart = valuesString.IndexOf("<Ref>", StringComparison.Ordinal);
+        if (refStart >= 0)
+        {
+            int refOpenBrace = valuesString.IndexOf('{', refStart);
+            int refCloseBrace = valuesString.IndexOf('}', refOpenBrace);
+            if (refOpenBrace != -1 && refCloseBrace != -1)
+            {
+                referencedVertexPool = valuesString.Substring(refOpenBrace + 1, refCloseBrace - refOpenBrace - 1).Trim();
+            }
+
+            valuesString = valuesString.Substring(0, refStart).Trim();
+        }
+
+        if (!vertexPoolMappings.TryGetValue(referencedVertexPool, out Dictionary<int, int> poolMapping))
+        {
+            DebugLogger.LogWarningEggImporter($"[PointLight] Vertex pool '{referencedVertexPool}' not found");
+            return;
+        }
+
+        string[] parts = valuesString.Split(SpaceNewlineCarriageReturnSeparators, StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < parts.Length; i++)
+        {
+            int localIndex;
+            if (int.TryParse(parts[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out localIndex) &&
+                poolMapping.TryGetValue(localIndex, out int globalIndex))
+            {
+                output.Add(globalIndex);
+            }
+        }
+    }
+
     public void BuildHierarchyAndMapGeometry(string[] lines, int start, int end, string currentPath, Dictionary<string, Transform> hierarchyMap, Dictionary<string, GeometryData> geometryMap, bool isInCollisionContext = false)
     {
         BuildHierarchyAndMapGeometry(lines, start, end, currentPath, hierarchyMap, geometryMap, new EggRenderState(), isInCollisionContext);
@@ -1114,6 +1379,7 @@ public class GeometryProcessor
                 GameObject newGO = new GameObject(uniqueName);
                 newGO.transform.SetParent(hierarchyMap[currentPath], false);
                 hierarchyMap[newPath] = newGO.transform;
+                ApplyDirectGroupMetadata(lines, i, groupEnd, newGO);
 
                 if (isLODGroup)
                 {
@@ -1129,8 +1395,9 @@ public class GeometryProcessor
             {
                 // Check if this group or its children will contain polygons by looking ahead in the EGG structure
                 bool containsGeometry = WillContainGeometry(lines, i, hierarchyMap, currentPath);
+                bool shouldApplyGeometryTransform = ShouldApplyTransformForGeometryGroup(hierarchyMap, currentPath);
                 
-                if (containsGeometry)
+                if (containsGeometry && !shouldApplyGeometryTransform)
                 {
                     DebugLogger.LogEggImporter($"🚫 Skipping transform for geometry group: '{currentPath}' (vertices already in world space)");
                     int transformEnd = _parserUtils.FindMatchingBrace(lines, i);
@@ -1161,10 +1428,273 @@ public class GeometryProcessor
                 }
                 ParsePolygon(lines, ref i, geometryMap[currentPath].subMeshes, geometryMap[currentPath].materialNames, inheritedRenderState, isInCollisionContext);
             }
+            else if (trimmedLine.StartsWith("<PointLight>".AsSpan(), StringComparison.Ordinal))
+            {
+                ParsePointPrimitive(lines, ref i, currentPath, hierarchyMap);
+            }
             else
             {
                 i++;
             }
+        }
+    }
+
+    private void ApplyDirectGroupMetadata(string[] lines, int groupStart, int groupEnd, GameObject go)
+    {
+        if (go == null) return;
+
+        PandaEggNodeMetadata metadata = go.GetComponent<PandaEggNodeMetadata>();
+        if (metadata == null)
+        {
+            metadata = go.AddComponent<PandaEggNodeMetadata>();
+        }
+
+        for (int i = groupStart + 1; i < groupEnd; i++)
+        {
+            string line = lines[i].Trim();
+
+            if (line.StartsWith("<DCS>"))
+            {
+                metadata.dcsType = ReadEggBlockValue(lines, i, _parserUtils.FindMatchingBrace(lines, i));
+            }
+            else if (line.StartsWith("<Model>"))
+            {
+                metadata.isModelNode = ParseEggBool(ReadEggBlockValue(lines, i, _parserUtils.FindMatchingBrace(lines, i)));
+            }
+            else if (line.StartsWith("<Switch>"))
+            {
+                metadata.isSwitch = ParseEggBool(ReadEggBlockValue(lines, i, _parserUtils.FindMatchingBrace(lines, i)));
+            }
+            else if (line.StartsWith("<Billboard>"))
+            {
+                metadata.billboardType = ReadEggBlockValue(lines, i, _parserUtils.FindMatchingBrace(lines, i));
+            }
+            else if (line.StartsWith("<Collide>"))
+            {
+                ParseCollideMetadata(lines, i, metadata);
+            }
+            else if (line.StartsWith("<Tag>"))
+            {
+                int tagEnd = _parserUtils.FindMatchingBrace(lines, i);
+                ParseTagMetadata(lines, i, tagEnd, metadata);
+                if (tagEnd > i) i = tagEnd;
+            }
+            else if (line.StartsWith("<Scalar> fps"))
+            {
+                float fps;
+                if (float.TryParse(EggMaterialRenderState.ReadScalarValue(line), NumberStyles.Float, CultureInfo.InvariantCulture, out fps))
+                {
+                    metadata.switchFps = fps;
+                }
+            }
+            else if (line.StartsWith("<Scalar> collide-mask"))
+            {
+                ParseCollideMask(EggMaterialRenderState.ReadScalarValue(line), metadata);
+            }
+            else if (line.StartsWith("<Distance>"))
+            {
+                ParseDistanceMetadata(lines, i, metadata);
+            }
+            else if (line.StartsWith("<SwitchCondition>"))
+            {
+                int switchConditionEnd = _parserUtils.FindMatchingBrace(lines, i);
+                for (int j = i + 1; j < switchConditionEnd; j++)
+                {
+                    if (lines[j].Trim().StartsWith("<Distance>"))
+                    {
+                        ParseDistanceMetadata(lines, j, metadata);
+                    }
+                }
+                if (switchConditionEnd > i) i = switchConditionEnd;
+            }
+
+            if (ShouldSkipMetadataBlock(line))
+            {
+                int blockEnd = _parserUtils.FindMatchingBrace(lines, i);
+                if (blockEnd > i)
+                {
+                    i = blockEnd;
+                }
+            }
+        }
+
+        if (metadata.HasAnyData)
+        {
+            AttachMetadataRuntimeBehaviors(go, metadata);
+        }
+        else
+        {
+            UnityEngine.Object.DestroyImmediate(metadata);
+        }
+    }
+
+    private void AttachMetadataRuntimeBehaviors(GameObject go, PandaEggNodeMetadata metadata)
+    {
+        if (go == null || metadata == null) return;
+
+        if (!string.IsNullOrEmpty(metadata.billboardType))
+        {
+            PandaEggBillboard billboard = go.GetComponent<PandaEggBillboard>();
+            if (billboard == null)
+            {
+                billboard = go.AddComponent<PandaEggBillboard>();
+            }
+
+            billboard.billboardType = metadata.billboardType;
+        }
+
+        if (metadata.isSwitch)
+        {
+            PandaEggSwitchController switchController = go.GetComponent<PandaEggSwitchController>();
+            if (switchController == null)
+            {
+                switchController = go.AddComponent<PandaEggSwitchController>();
+            }
+
+            switchController.fps = metadata.switchFps;
+            switchController.playOnStart = metadata.switchFps > 0.0f;
+        }
+    }
+
+    private bool ShouldSkipMetadataBlock(string line)
+    {
+        return line.StartsWith("<Group>") ||
+               line.StartsWith("<Polygon>") ||
+               line.StartsWith("<VertexPool>") ||
+               line.StartsWith("<Texture>") ||
+               line.StartsWith("<Transform>") ||
+               line.StartsWith("<Joint>") ||
+               line.StartsWith("<Bundle>") ||
+               line.StartsWith("<Table>");
+    }
+
+    private string ReadEggBlockValue(string[] lines, int start, int end)
+    {
+        if (start < 0 || start >= lines.Length) return string.Empty;
+        if (end < start) end = start;
+
+        string line = lines[start].Trim();
+        int openBrace = line.IndexOf('{');
+        int closeBrace = line.LastIndexOf('}');
+        if (openBrace >= 0 && closeBrace > openBrace)
+        {
+            return line.Substring(openBrace + 1, closeBrace - openBrace - 1).Trim().Trim('"');
+        }
+
+        var builder = new StringBuilder();
+        for (int i = start + 1; i < end && i < lines.Length; i++)
+        {
+            string valueLine = lines[i].Trim();
+            if (valueLine.Length == 0) continue;
+            if (builder.Length > 0) builder.Append(' ');
+            builder.Append(valueLine);
+        }
+
+        return builder.ToString().Trim().Trim('"');
+    }
+
+    private bool ParseEggBool(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return false;
+
+        string normalized = value.Trim().ToLowerInvariant();
+        return normalized == "1" ||
+               normalized == "true" ||
+               normalized == "yes" ||
+               normalized == "on";
+    }
+
+    private void ParseTagMetadata(string[] lines, int tagStart, int tagEnd, PandaEggNodeMetadata metadata)
+    {
+        if (metadata == null) return;
+
+        string line = lines[tagStart].Trim();
+        string key = ExtractEggEntryName(line, "<Tag>");
+        string value = ReadEggBlockValue(lines, tagStart, tagEnd);
+        metadata.AddOrReplaceTag(key, value);
+    }
+
+    private void ParseCollideMetadata(string[] lines, int collideStart, PandaEggNodeMetadata metadata)
+    {
+        if (metadata == null) return;
+
+        string line = lines[collideStart].Trim();
+        metadata.collisionName = ExtractEggEntryName(line, "<Collide>");
+
+        string value = ReadEggBlockValue(lines, collideStart, _parserUtils.FindMatchingBrace(lines, collideStart));
+        string[] parts = value.Split(SpaceNewlineCarriageReturnSeparators, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return;
+
+        metadata.collisionType = parts[0];
+        if (parts.Length > 1)
+        {
+            string[] flags = new string[parts.Length - 1];
+            Array.Copy(parts, 1, flags, 0, flags.Length);
+            metadata.collisionFlags = flags;
+        }
+        else
+        {
+            metadata.collisionFlags = Array.Empty<string>();
+        }
+    }
+
+    private string ExtractEggEntryName(string line, string tag)
+    {
+        if (string.IsNullOrEmpty(line) || string.IsNullOrEmpty(tag)) return string.Empty;
+
+        int tagIndex = line.IndexOf(tag, StringComparison.Ordinal);
+        if (tagIndex < 0) return string.Empty;
+
+        int nameStart = tagIndex + tag.Length;
+        int braceIndex = line.IndexOf('{', nameStart);
+        if (braceIndex < 0) return string.Empty;
+
+        string name = line.Substring(nameStart, braceIndex - nameStart).Trim();
+        return name == "{" ? string.Empty : name;
+    }
+
+    private void ParseCollideMask(string value, PandaEggNodeMetadata metadata)
+    {
+        if (metadata == null || string.IsNullOrEmpty(value)) return;
+
+        metadata.collideMaskRaw = value.Trim();
+        string normalized = metadata.collideMaskRaw;
+        if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            int mask;
+            if (int.TryParse(normalized.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out mask))
+            {
+                metadata.collideMask = mask;
+                metadata.hasCollideMask = true;
+            }
+        }
+        else
+        {
+            int mask;
+            if (int.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out mask))
+            {
+                metadata.collideMask = mask;
+                metadata.hasCollideMask = true;
+            }
+        }
+    }
+
+    private void ParseDistanceMetadata(string[] lines, int distanceStart, PandaEggNodeMetadata metadata)
+    {
+        if (metadata == null) return;
+
+        string value = ReadEggBlockValue(lines, distanceStart, _parserUtils.FindMatchingBrace(lines, distanceStart));
+        string[] parts = value.Split(SpaceNewlineCarriageReturnSeparators, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2) return;
+
+        float farDistance;
+        float nearDistance;
+        if (float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out farDistance) &&
+            float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out nearDistance))
+        {
+            metadata.lodFarDistance = farDistance;
+            metadata.lodNearDistance = nearDistance;
+            metadata.hasLodDistance = true;
         }
     }
 
@@ -1173,9 +1703,9 @@ public class GeometryProcessor
         for (int i = start; i < end; i++)
         {
             string line = lines[i].Trim();
-            if (line.StartsWith("<Scalar>"))
+            if (line.StartsWith("<Scalar>") || line.StartsWith("<BFace>"))
             {
-                EggMaterialRenderState.ApplyScalarLine(state, line);
+                EggMaterialRenderState.ApplyRenderStateLine(state, line);
                 continue;
             }
 
@@ -1286,10 +1816,7 @@ public class GeometryProcessor
             if (line.StartsWith("<Transform>")) { joint.transform = ParseTransformMatrix(lines, ref i, parserUtils); }
             else if (line.StartsWith("<DefaultPose>"))
             {
-                // Skip DefaultPose blocks entirely to force T-pose
-                int defaultPoseEnd = parserUtils.FindMatchingBrace(lines, i);
-                if (defaultPoseEnd != -1) i = defaultPoseEnd;
-                else i++;
+                joint.defaultPose = ParseTransformMatrix(lines, ref i, parserUtils);
             }
             else if (line.StartsWith("<Joint>"))
             {
@@ -1482,6 +2009,8 @@ public class GeometryProcessor
         masterUVs = masterUVsList.ToArray();
         masterUV2s = masterUV2sList.ToArray();
         masterColors = masterColorsList.ToArray();
+        _cachedMasterVertices = masterVertices;
+        _cachedMasterColors = masterColors;
 
         int uv2Count = masterUV2s.Count(uv => uv != Vector2.zero);
         DebugLogger.LogEggImporter($"[VertexPool] Created master vertex buffer with {masterVertices.Length} total vertices from {verticesByPool.Count} vertex pools");
@@ -1514,6 +2043,17 @@ public class GeometryProcessor
         
         // Check if this group or any child groups contain polygons
         return ContainsPolygonsRecursive(lines, groupStart, groupEnd);
+    }
+
+    private bool ShouldApplyTransformForGeometryGroup(Dictionary<string, Transform> hierarchyMap, string currentPath)
+    {
+        if (hierarchyMap == null || !hierarchyMap.TryGetValue(currentPath, out Transform transform) || transform == null)
+        {
+            return false;
+        }
+
+        PandaEggNodeMetadata metadata = transform.GetComponent<PandaEggNodeMetadata>();
+        return metadata != null && !string.IsNullOrEmpty(metadata.billboardType);
     }
     
     private bool ContainsPolygonsRecursive(string[] lines, int start, int end)

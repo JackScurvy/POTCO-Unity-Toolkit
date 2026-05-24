@@ -479,6 +479,9 @@ public class EggImporter : ScriptedImporter
             }
         }
         RecordTiming("Create Meshes");
+
+        _geometryProcessor.ConfigureLODGroups(rootGO);
+        RecordTiming("Configure LOD Groups");
         
         // --- Pass 4: Parse and create animations ---
         ParseAnimations(lines, rootGO, ctx);

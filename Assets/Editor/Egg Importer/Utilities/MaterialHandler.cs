@@ -194,8 +194,12 @@ public class MaterialHandler
 
     private void ApplyWrapModeToTexture(Texture2D texture, TextureWrapData wrapData)
     {
-        // Set texture to repeat by default - we'll control wrap mode per-material via shader
-        texture.wrapMode = TextureWrapMode.Repeat;
+        if (texture == null) return;
+        if (wrapData == null) wrapData = new TextureWrapData();
+
+        texture.wrapModeU = ToUnityWrapMode(wrapData.wrapU);
+        texture.wrapModeV = ToUnityWrapMode(wrapData.wrapV);
+        texture.filterMode = ToUnityFilterMode(wrapData);
     }
 
     private Vector4 GetWrapModeVector(TextureWrapData wrapData)
@@ -204,6 +208,43 @@ public class MaterialHandler
         float wrapU = wrapData.wrapU == "clamp" ? 1.0f : 0.0f;
         float wrapV = wrapData.wrapV == "clamp" ? 1.0f : 0.0f;
         return new Vector4(wrapU, wrapV, 0, 0);
+    }
+
+    private TextureWrapMode ToUnityWrapMode(string eggWrapMode)
+    {
+        if (string.IsNullOrEmpty(eggWrapMode)) return TextureWrapMode.Repeat;
+
+        string normalized = eggWrapMode.Trim().ToLowerInvariant().Replace("-", "_");
+        switch (normalized)
+        {
+            case "clamp":
+                return TextureWrapMode.Clamp;
+            case "mirror":
+            case "mirrored_repeat":
+                return TextureWrapMode.Mirror;
+            case "repeat":
+            default:
+                return TextureWrapMode.Repeat;
+        }
+    }
+
+    private FilterMode ToUnityFilterMode(TextureWrapData wrapData)
+    {
+        string minFilter = wrapData != null ? wrapData.minFilter : null;
+        string magFilter = wrapData != null ? wrapData.magFilter : null;
+        string combined = ((minFilter ?? string.Empty) + " " + (magFilter ?? string.Empty)).ToLowerInvariant();
+
+        if (combined.Contains("nearest") || combined.Contains("point"))
+        {
+            return FilterMode.Point;
+        }
+
+        if (combined.Contains("linear_mipmap_linear"))
+        {
+            return FilterMode.Trilinear;
+        }
+
+        return FilterMode.Bilinear;
     }
 
     public void CreateMultiTextureMaterials(List<Material> materials, List<string> materialNames, Dictionary<string, string> texturePaths, Dictionary<string, string> textureUVNames)
@@ -289,7 +330,11 @@ public class MaterialHandler
                     if (texturePaths.TryGetValue(firstTexName, out string firstPath))
                     {
                         Texture2D firstTex = FindTextureInProject(firstPath);
-                        if (firstTex) ApplyWrapModeToTexture(firstTex, new TextureWrapData());
+                        if (firstTex)
+                        {
+                            TextureWrapData firstWrapData = textureWrapModes.TryGetValue(firstTexName, out TextureWrapData firstWrap) ? firstWrap : new TextureWrapData();
+                            ApplyWrapModeToTexture(firstTex, firstWrapData);
+                        }
 
                         if (needsSwap)
                         {
@@ -306,7 +351,11 @@ public class MaterialHandler
                     if (texturePaths.TryGetValue(secondTexName, out string secondPath))
                     {
                         Texture2D secondTex = FindTextureInProject(secondPath);
-                        if (secondTex) ApplyWrapModeToTexture(secondTex, new TextureWrapData());
+                        if (secondTex)
+                        {
+                            TextureWrapData secondWrapData = textureWrapModes.TryGetValue(secondTexName, out TextureWrapData secondWrap) ? secondWrap : new TextureWrapData();
+                            ApplyWrapModeToTexture(secondTex, secondWrapData);
+                        }
 
                         if (needsSwap)
                         {
@@ -639,7 +688,7 @@ public class MaterialHandler
 
         if (mat.HasProperty(CullPropertyId))
         {
-            bool doubleSided = hasAlphaTexture || state.IsTransparent || state.UsesAlphaTest || useParticleGUI;
+            bool doubleSided = state.DoubleSided || hasAlphaTexture || state.IsTransparent || state.UsesAlphaTest || useParticleGUI;
             mat.SetInt(CullPropertyId, doubleSided ? (int)UnityEngine.Rendering.CullMode.Off : (int)UnityEngine.Rendering.CullMode.Back);
         }
 

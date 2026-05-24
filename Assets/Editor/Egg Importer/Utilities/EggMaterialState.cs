@@ -22,6 +22,7 @@ public class EggRenderState
     public bool? DepthWrite = null;
     public int? DrawOrder = null;
     public string Bin = null;
+    public bool? DoubleSided = null;
 
     public EggRenderState Clone()
     {
@@ -30,7 +31,8 @@ public class EggRenderState
             AlphaMode = AlphaMode,
             DepthWrite = DepthWrite,
             DrawOrder = DrawOrder,
-            Bin = Bin
+            Bin = Bin,
+            DoubleSided = DoubleSided
         };
     }
 }
@@ -41,6 +43,7 @@ public class EggMaterialState
     public bool DepthWrite = true;
     public int DrawOrder = 0;
     public string Bin = null;
+    public bool DoubleSided = false;
 
     public bool IsTransparent
     {
@@ -65,18 +68,19 @@ public class EggMaterialState
 
     public bool IsDefault
     {
-        get { return AlphaMode == EggAlphaMode.Off && DepthWrite && DrawOrder == 0 && string.IsNullOrEmpty(Bin); }
+        get { return AlphaMode == EggAlphaMode.Off && DepthWrite && DrawOrder == 0 && string.IsNullOrEmpty(Bin) && !DoubleSided; }
     }
 
     public string ToKey()
     {
         return string.Format(
             CultureInfo.InvariantCulture,
-            "alpha={0};zwrite={1};order={2};bin={3}",
+            "alpha={0};zwrite={1};order={2};bin={3};bface={4}",
             EggMaterialRenderState.AlphaModeToEggValue(AlphaMode),
             DepthWrite ? "1" : "0",
             DrawOrder,
-            string.IsNullOrEmpty(Bin) ? "default" : Bin);
+            string.IsNullOrEmpty(Bin) ? "default" : Bin,
+            DoubleSided ? "1" : "0");
     }
 }
 
@@ -90,6 +94,16 @@ public static class EggMaterialRenderState
         int closeBrace = line.LastIndexOf('}');
         if (openBrace < 0 || closeBrace <= openBrace) return string.Empty;
         return line.Substring(openBrace + 1, closeBrace - openBrace - 1).Trim().Trim('"');
+    }
+
+    public static bool ApplyRenderStateLine(EggRenderState state, string line)
+    {
+        if (ApplyScalarLine(state, line))
+        {
+            return true;
+        }
+
+        return ApplyBFaceLine(state, line);
     }
 
     public static bool ApplyScalarLine(EggRenderState state, string line)
@@ -134,6 +148,23 @@ public static class EggMaterialRenderState
         else if (lowerLine.StartsWith("<scalar> bin", StringComparison.Ordinal))
         {
             state.Bin = value;
+            return true;
+        }
+
+        return false;
+    }
+
+    public static bool ApplyBFaceLine(EggRenderState state, string line)
+    {
+        if (state == null || string.IsNullOrEmpty(line) || !line.StartsWith("<BFace>", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        bool parsed;
+        if (TryParseBool(ReadScalarValue(line), out parsed))
+        {
+            state.DoubleSided = parsed;
             return true;
         }
 
@@ -267,7 +298,8 @@ public static class EggMaterialRenderState
             AlphaMode = resolvedMode,
             DepthWrite = depthWrite,
             DrawOrder = renderState != null && renderState.DrawOrder.HasValue ? renderState.DrawOrder.Value : 0,
-            Bin = renderState != null ? renderState.Bin : null
+            Bin = renderState != null ? renderState.Bin : null,
+            DoubleSided = renderState != null && renderState.DoubleSided.HasValue && renderState.DoubleSided.Value
         };
     }
 
@@ -336,6 +368,14 @@ public static class EggMaterialRenderState
             else if (name == "bin" && value != "default")
             {
                 state.Bin = value;
+            }
+            else if (name == "bface")
+            {
+                bool parsed;
+                if (TryParseBool(value, out parsed))
+                {
+                    state.DoubleSided = parsed;
+                }
             }
         }
 

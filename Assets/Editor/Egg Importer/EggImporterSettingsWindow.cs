@@ -1056,8 +1056,10 @@ public class EggImporterSettingsWindow : EditorWindow
             string assetPath = AssetDatabase.GUIDToAssetPath(guid);
             if (assetPath.EndsWith(".egg", System.StringComparison.OrdinalIgnoreCase))
             {
-                ForceImportEggFile(assetPath);
-                importedCount++;
+                if (ForceImportEggFile(assetPath))
+                {
+                    importedCount++;
+                }
             }
         }
         
@@ -1098,8 +1100,10 @@ public class EggImporterSettingsWindow : EditorWindow
             string relativePath = "Assets" + fullPath.Substring(Application.dataPath.Length);
             relativePath = relativePath.Replace('\\', '/');
             
-            ForceImportEggFile(relativePath);
-            importedCount++;
+            if (ForceImportEggFile(relativePath))
+            {
+                importedCount++;
+            }
             
             // Show progress
             EditorUtility.DisplayProgressBar("Importing EGG Files", 
@@ -1153,11 +1157,77 @@ public class EggImporterSettingsWindow : EditorWindow
         }
     }
 
-    private void ForceImportEggFile(string assetPath)
+    private bool ForceImportEggFile(string assetPath)
     {
-        DebugLogger.LogEggImporter($"Force importing: {assetPath}");
+        return EggImporterManualImport.TryImportEggAsset(assetPath);
+    }
+}
 
-        // Temporarily enable auto-import for this specific import
+public static class EggImporterManualImport
+{
+    private const string DirectProjectMenuPath = "Assets/Reimport EGG (POTCO)";
+    private const string ProjectMenuPath = "Assets/POTCO/Reimport Selected EGG";
+    private const string MainMenuPath = "POTCO/EGG Importer/Reimport Selected EGG";
+
+    [MenuItem(DirectProjectMenuPath, true)]
+    private static bool ValidateDirectProjectReimportEgg()
+    {
+        return HasSelectedEggAssets();
+    }
+
+    [MenuItem(DirectProjectMenuPath, false, 1000)]
+    private static void ReimportSelectedEggsFromDirectProjectMenu()
+    {
+        ReimportSelectedEggsWithDialog();
+    }
+
+    [MenuItem(ProjectMenuPath, true)]
+    private static bool ValidateProjectReimportSelectedEggs()
+    {
+        return HasSelectedEggAssets();
+    }
+
+    [MenuItem(ProjectMenuPath, false, 1000)]
+    private static void ReimportSelectedEggsFromProjectMenu()
+    {
+        ReimportSelectedEggsWithDialog();
+    }
+
+    [MenuItem(MainMenuPath, true)]
+    private static bool ValidateMainMenuReimportSelectedEggs()
+    {
+        return HasSelectedEggAssets();
+    }
+
+    [MenuItem(MainMenuPath, false)]
+    private static void ReimportSelectedEggsFromMainMenu()
+    {
+        ReimportSelectedEggsWithDialog();
+    }
+
+    public static int ImportSelectedEggAssets()
+    {
+        int importedCount = 0;
+        foreach (string assetPath in GetSelectedEggAssetPaths())
+        {
+            if (TryImportEggAsset(assetPath))
+            {
+                importedCount++;
+            }
+        }
+
+        return importedCount;
+    }
+
+    public static bool TryImportEggAsset(string assetPath)
+    {
+        if (!IsEggAssetPath(assetPath))
+        {
+            return false;
+        }
+
+        DebugLogger.LogEggImporter($"Manual EGG import: {assetPath}");
+
         var settings = EggImporterSettings.Instance;
         bool originalSetting = settings.autoImportEnabled;
         settings.autoImportEnabled = true;
@@ -1167,15 +1237,59 @@ public class EggImporterSettingsWindow : EditorWindow
         {
             using (EggImportSession.BeginExplicitImport())
             {
-                // Force reimport the asset
                 AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
             }
         }
         finally
         {
-            // Restore original setting
             settings.autoImportEnabled = originalSetting;
             EditorUtility.SetDirty(settings);
         }
+
+        return true;
+    }
+
+    private static void ReimportSelectedEggsWithDialog()
+    {
+        int importedCount = ImportSelectedEggAssets();
+
+        if (importedCount == 0)
+        {
+            DebugLogger.LogEggImporter("No EGG files selected. Please select EGG files in the Project window.");
+            EditorUtility.DisplayDialog("No EGG Files", "No EGG files were selected. Please select EGG files in the Project window and try again.", "OK");
+            return;
+        }
+
+        DebugLogger.LogEggImporter($"Successfully imported {importedCount} EGG files manually.");
+        EditorUtility.DisplayDialog("Import Complete", $"Successfully imported {importedCount} EGG files.", "OK");
+    }
+
+    private static bool HasSelectedEggAssets()
+    {
+        foreach (string assetPath in GetSelectedEggAssetPaths())
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> GetSelectedEggAssetPaths()
+    {
+        var seenPaths = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        foreach (string guid in Selection.assetGUIDs)
+        {
+            string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+            if (IsEggAssetPath(assetPath) && seenPaths.Add(assetPath))
+            {
+                yield return assetPath;
+            }
+        }
+    }
+
+    private static bool IsEggAssetPath(string assetPath)
+    {
+        return !string.IsNullOrEmpty(assetPath)
+            && assetPath.EndsWith(".egg", System.StringComparison.OrdinalIgnoreCase);
     }
 }
