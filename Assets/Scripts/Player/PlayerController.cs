@@ -110,6 +110,9 @@ namespace Player
             // Auto-attach ShipBoarding for swimming interactions
             if (GetComponent<ShipBoarding>() == null)
                 gameObject.AddComponent<ShipBoarding>();
+
+            if (GetComponent<POTCO.Inventory.PotcoInventoryController>() == null)
+                gameObject.AddComponent<POTCO.Inventory.PotcoInventoryController>();
         }
 
         private void Start()

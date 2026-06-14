@@ -85,6 +85,11 @@ namespace POTCO.Editor.ItemCreator
                 DuplicateSelectedItem();
             GUI.enabled = true;
 
+            GUI.enabled = selectedRow != null && EditorApplication.isPlaying;
+            if (GUILayout.Button("Add To Play Inventory", EditorStyles.toolbarButton, GUILayout.Width(140)))
+                AddSelectedToPlayInventory();
+            GUI.enabled = true;
+
             GUILayout.FlexibleSpace();
 
             GUI.enabled = dirtyRows.Count > 0;
@@ -329,6 +334,28 @@ namespace POTCO.Editor.ItemCreator
             {
                 EditorUtility.DisplayDialog("Save Failed", ex.Message, "OK");
             }
+        }
+
+        private void AddSelectedToPlayInventory()
+        {
+            if (selectedRow == null)
+                return;
+
+            POTCO.Inventory.PotcoInventoryController controller = POTCO.Inventory.PotcoInventoryController.FindActive();
+            if (controller == null)
+            {
+                EditorUtility.DisplayDialog("No Play Inventory", "No active POTCO inventory controller was found in the playing scene.", "OK");
+                return;
+            }
+
+            POTCO.Inventory.PotcoInventoryAddResult result = controller.AddItemToInventory(selectedRow.ItemId);
+            if (!result.Success)
+            {
+                EditorUtility.DisplayDialog("Add Item Failed", result.Message, "OK");
+                return;
+            }
+
+            Debug.Log($"Added POTCO item {selectedRow.ItemId} to play inventory at slot {result.PrimaryLocation}.");
         }
     }
 }

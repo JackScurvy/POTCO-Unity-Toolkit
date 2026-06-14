@@ -54,6 +54,9 @@ public class FPSCounter : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoCreate()
     {
+#if POTCO_INVENTORY_SCREENSHOT_CAPTURE
+        return;
+#else
         // Auto-create FPS counter on play
         if (FindAnyObjectByType<FPSCounter>() == null)
         {
@@ -62,5 +65,6 @@ public class FPSCounter : MonoBehaviour
             DontDestroyOnLoad(fpsObj);
             Debug.Log("FPS Counter created automatically");
         }
+#endif
     }
 }
