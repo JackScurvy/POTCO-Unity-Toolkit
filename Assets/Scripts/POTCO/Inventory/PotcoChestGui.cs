@@ -16,7 +16,7 @@ namespace POTCO.Inventory
         private const float ReferenceSideTabWidth = 0.25f;
         private const float ReferenceSideTabInactiveHeight = 0.2f;
         private const float ReferenceSideTabActiveHeight = 0.22f;
-        private const float ReferenceSideTabSpacing = 0.12f;
+        private const float ReferenceSideTabSpacing = 0.132f;
         private const float ReferenceChestTabFrameWidth = 0.25f;
         private const float ReferenceChestTabFrameHeight = 0.2f;
         private const float ReferenceChestTabBorderScale = 0.38f;
@@ -37,6 +37,8 @@ namespace POTCO.Inventory
         private static readonly Vector2 ReferenceSeaChestSideTentaclePosition = new Vector2(0.5945f, 0.2652f);
         private static readonly Vector2 ReferenceSeaChestBorderPosition = new Vector2(0.0623f, -0.0166f);
         private const float ReferenceCharGuiButtonScale = 0.45f;
+        private const float ReferenceCharGuiButtonWidth = 0.625f * ReferenceCharGuiButtonScale;
+        private const float ReferenceCharGuiButtonHeight = 0.225f * ReferenceCharGuiButtonScale;
         private const float ReferenceTrashGeomScale = 0.4f;
         private const float ReferenceGoldItemImageScale = 0.378f;
         private static readonly bool UseNativeChestChrome = false;
@@ -51,6 +53,8 @@ namespace POTCO.Inventory
         private static readonly Vector2 ReferenceClothingBagPosition = new Vector2(0.31f, 0.20f);
         private static readonly Vector2 ReferenceJewelryBagPosition = new Vector2(0.46f, 0.21f);
         private static readonly Vector2 ReferencePotionBagPosition = new Vector2(0.12f, 0.22f);
+        private static readonly Vector2 ReferenceAmmoBagPosition = new Vector2(0.03f, 0.248f);
+        private static readonly Vector2 ReferenceCardsBagPosition = new Vector2(0.16f, 0.20f);
         private static readonly Vector2 ReferenceHotbarPosition = new Vector2(0.075f, 0.895f);
         private static readonly Vector2 ReferenceClothingDressingPosition = new Vector2(-0.225f, 0f);
         private static readonly Vector2 ReferenceJewelryDressingPosition = new Vector2(-0.37f, 0.41f);
@@ -392,6 +396,9 @@ namespace POTCO.Inventory
             Rect content = CalculateContentRect(panel);
             Rect pageBacking = CalculatePageBackingRect(content);
             IReadOnlyList<Rect> sideTabRects = CalculateSideTabRects(panel);
+            DrawReferenceChestSideTentacle(reference);
+            DrawInactiveSideTabs(sideTabRects);
+
             bool drewReferenceBackground = DrawReferenceChestBackground(reference);
             if (!drewReferenceBackground && !nativeDrawnKeys.Contains("panel"))
                 DrawFallbackPanel(panel, titleRect, pageBacking);
@@ -407,9 +414,10 @@ namespace POTCO.Inventory
 
             DrawReferenceEquipmentSlots(reference);
 
-            if (activePage != PotcoChestPageKind.Treasure)
+            if (ShouldShowBottomControls(activePage))
                 DrawBottomControls(reference);
-            DrawReferenceChestBorder(reference);
+            DrawReferenceChestBorderFrame(reference);
+            DrawActiveSideTab(sideTabRects);
             DrawReferenceTitleBar(reference, titleRect);
             DrawPanelTitle(titleRect, page);
             DrawSideTabHitboxes(sideTabRects);
@@ -431,9 +439,20 @@ namespace POTCO.Inventory
 
         private bool DrawReferenceChestBorder(GuiReferenceLayout reference)
         {
-            bool drewSideTentacle = DrawReferenceGuiSprite(reference, PotcoRuntimeGuiAssetResolver.SeaChestGui, "side_tentacle", ReferenceSeaChestSideTentaclePosition, Vector2.one * ReferenceSeaChestScale, Color.white, false, true);
-            bool drewBorder = DrawReferenceGuiSprite(reference, PotcoRuntimeGuiAssetResolver.SeaChestGui, "border", ReferenceSeaChestBorderPosition, Vector2.one * ReferenceSeaChestScale, Color.white, false, true);
+            bool drewSideTentacle = DrawReferenceChestSideTentacle(reference);
+            bool drewBorder = DrawReferenceChestBorderFrame(reference);
             return drewSideTentacle && drewBorder;
+        }
+
+        private bool DrawReferenceChestSideTentacle(GuiReferenceLayout reference)
+        {
+            return DrawReferenceGuiSprite(reference, PotcoRuntimeGuiAssetResolver.SeaChestGui, "side_tentacle", ReferenceSeaChestSideTentaclePosition, Vector2.one * ReferenceSeaChestScale, Color.white, false, true);
+        }
+
+        private bool DrawReferenceChestBorderFrame(GuiReferenceLayout reference)
+        {
+            bool drewBorder = DrawReferenceGuiSprite(reference, PotcoRuntimeGuiAssetResolver.SeaChestGui, "border", ReferenceSeaChestBorderPosition, Vector2.one * ReferenceSeaChestScale, Color.white, false, true);
+            return drewBorder;
         }
 
         private static Rect CalculatePanelRect()
@@ -510,14 +529,20 @@ namespace POTCO.Inventory
 
         private IReadOnlyList<Rect> CalculateSideTabRects(Rect panel)
         {
-            return new[]
-            {
-                CalculateSideTabRect(panel, 0),
-                CalculateSideTabRect(panel, 1),
-                CalculateSideTabRect(panel, 2),
-                CalculateSideTabRect(panel, 3),
-                CalculateSideTabRect(panel, 4)
-            };
+            IReadOnlyList<PotcoChestPageLayout> pages = GetOrderedPages();
+            Rect[] rects = new Rect[pages.Count];
+            for (int i = 0; i < rects.Length; i++)
+                rects[i] = CalculateSideTabRect(panel, i);
+
+            return rects;
+        }
+
+        private static bool ShouldShowBottomControls(PotcoChestPageKind pageKind)
+        {
+            return pageKind == PotcoChestPageKind.WeaponBelt ||
+                   pageKind == PotcoChestPageKind.Garb ||
+                   pageKind == PotcoChestPageKind.JewelryAndTattoos ||
+                   pageKind == PotcoChestPageKind.PotionsPouch;
         }
 
         private void DrawFallbackPanel(Rect panel, Rect titleRect, Rect pageBacking)
@@ -549,6 +574,11 @@ namespace POTCO.Inventory
                     return "gui_inv_jewelry";
                 case PotcoChestPageKind.PotionsPouch:
                     return "gui_inv_red_general1";
+                case PotcoChestPageKind.Ammo:
+                case PotcoChestPageKind.Materials:
+                    return "gui_inv_ammo";
+                case PotcoChestPageKind.Cards:
+                    return "gui_inv_cards";
                 case PotcoChestPageKind.WeaponBelt:
                 case PotcoChestPageKind.Treasure:
                 default:
@@ -558,7 +588,18 @@ namespace POTCO.Inventory
 
         private static Vector2 GetReferencePageBackingPosition(PotcoChestPageKind pageKind)
         {
-            return pageKind == PotcoChestPageKind.PotionsPouch ? new Vector2(0f, 0.02f) : Vector2.zero;
+            switch (pageKind)
+            {
+                case PotcoChestPageKind.PotionsPouch:
+                    return new Vector2(0f, 0.02f);
+                case PotcoChestPageKind.Ammo:
+                case PotcoChestPageKind.Materials:
+                    return new Vector2(0f, -0.05f);
+                case PotcoChestPageKind.Cards:
+                    return new Vector2(-0.07f, -0.05f);
+                default:
+                    return Vector2.zero;
+            }
         }
 
         private void DrawReferenceTitleBar(GuiReferenceLayout reference, Rect fallbackRect)
@@ -574,41 +615,61 @@ namespace POTCO.Inventory
             GUI.Label(new Rect(titleRect.x + 10f, titleRect.y + 3f, titleRect.width - 20f, titleRect.height - 8f), page.Title, titleStyle);
         }
 
-        private void DrawSideTabHitboxes(IReadOnlyList<Rect> sideTabRects)
+        private void DrawInactiveSideTabs(IReadOnlyList<Rect> sideTabRects)
         {
             IReadOnlyList<PotcoChestPageLayout> pages = GetOrderedPages();
-            int activeIndex = -1;
-            for (int i = 0; i < pages.Count && i < sideTabRects.Count; i++)
+            for (int i = pages.Count - 1; i >= 0; i--)
             {
+                if (i >= sideTabRects.Count)
+                    continue;
+
                 PotcoChestPageLayout page = pages[i];
                 bool active = activePage == page.Kind;
                 if (active)
-                {
-                    activeIndex = i;
                     continue;
-                }
 
-                DrawSideTab(page, sideTabRects[i], false);
+                DrawSideTabArt(page, sideTabRects[i], false);
             }
-
-            if (activeIndex >= 0 && activeIndex < pages.Count && activeIndex < sideTabRects.Count)
-                DrawSideTab(pages[activeIndex], sideTabRects[activeIndex], true);
         }
 
-        private void DrawSideTab(PotcoChestPageLayout page, Rect tabRect, bool active)
+        private void DrawActiveSideTab(IReadOnlyList<Rect> sideTabRects)
         {
+            IReadOnlyList<PotcoChestPageLayout> pages = GetOrderedPages();
+            for (int i = 0; i < pages.Count && i < sideTabRects.Count; i++)
+            {
+                PotcoChestPageLayout page = pages[i];
+                if (activePage != page.Kind)
+                    continue;
+
+                DrawSideTabArt(page, sideTabRects[i], true);
+                return;
+            }
+        }
+
+        private void DrawSideTabHitboxes(IReadOnlyList<Rect> sideTabRects)
+        {
+            IReadOnlyList<PotcoChestPageLayout> pages = GetOrderedPages();
             Event current = Event.current;
-            bool hover = current != null && tabRect.Contains(current.mousePosition);
-            DrawReferenceChestTabFrame(tabRect, active || hover);
+            for (int i = 0; i < pages.Count && i < sideTabRects.Count; i++)
+            {
+                PotcoChestPageLayout page = pages[i];
+                Rect tabRect = sideTabRects[i];
+                bool hover = current != null && tabRect.Contains(current.mousePosition);
 
-            if (GUI.Button(tabRect, GUIContent.none, GUIStyle.none))
-                activePage = page.Kind;
+                if (GUI.Button(tabRect, GUIContent.none, GUIStyle.none))
+                    activePage = page.Kind;
 
-            if (!DrawReferencePageIcon(page, tabRect, active || hover, active || hover ? Color.white : new Color(0.8f, 0.8f, 0.8f, 1f)))
+                if (hover)
+                    GUI.Label(new Rect(tabRect.xMax + 4f, tabRect.y + 2f, 170f, tabRect.height - 4f), page.Title, labelStyle);
+            }
+        }
+
+        private void DrawSideTabArt(PotcoChestPageLayout page, Rect tabRect, bool active)
+        {
+            DrawReferenceChestTabFrame(tabRect, active);
+
+            if (!DrawReferencePageIcon(page, tabRect, active, active ? Color.white : new Color(0.8f, 0.8f, 0.8f, 1f)))
                 GUI.Label(tabRect, page.Title.Substring(0, Math.Min(2, page.Title.Length)), active ? activeTabStyle : tabStyle);
-
-            if (hover)
-                GUI.Label(new Rect(tabRect.xMax + 4f, tabRect.y + 2f, 170f, tabRect.height - 4f), page.Title, labelStyle);
         }
 
         private void DrawReferenceChestTabFrame(Rect tabRect, bool emphasized)
@@ -636,14 +697,14 @@ namespace POTCO.Inventory
             DrawReferenceChestTabBackground(tabRect, borderWidth, borderHeight);
 
             bool drew =
-                DrawRegion(new Rect(tabRect.x, tabRect.y, tabRect.width, borderHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "top1"), tint, false, true) |
-                DrawRegion(new Rect(tabRect.x, tabRect.yMax - borderHeight, tabRect.width, borderHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottom"), tint, false, true) |
-                DrawRegion(new Rect(tabRect.x, tabRect.y, borderWidth, tabRect.height), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "left"), tint, false, true) |
-                DrawRegion(new Rect(tabRect.xMax - borderWidth, tabRect.y, borderWidth, tabRect.height), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "right"), Color.black, false, true) |
-                DrawRegion(new Rect(tabRect.x, tabRect.y, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "topLeft"), tint, false, true) |
-                DrawRegion(new Rect(tabRect.xMax - cornerWidth, tabRect.y, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "topRight"), tint, false, true) |
-                DrawRegion(new Rect(tabRect.x, tabRect.yMax - cornerHeight, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottomLeft"), tint, false, true) |
-                DrawRegion(new Rect(tabRect.xMax - cornerWidth, tabRect.yMax - cornerHeight, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottomRight"), tint, false, true);
+                DrawRegion(new Rect(tabRect.x, tabRect.y, tabRect.width, borderHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "top1"), tint, false) |
+                DrawRegion(new Rect(tabRect.x, tabRect.yMax - borderHeight, tabRect.width, borderHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottom"), tint, false) |
+                DrawRegion(new Rect(tabRect.x, tabRect.y, borderWidth, tabRect.height), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "left"), tint, false) |
+                DrawReferenceLeftTabRightEdge(tabRect, borderWidth) |
+                DrawRegion(new Rect(tabRect.x, tabRect.y, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "topLeft"), tint, false) |
+                DrawRegion(new Rect(tabRect.xMax - cornerWidth, tabRect.y, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "topRight"), tint, false) |
+                DrawRegion(new Rect(tabRect.x, tabRect.yMax - cornerHeight, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottomLeft"), tint, false) |
+                DrawRegion(new Rect(tabRect.xMax - cornerWidth, tabRect.yMax - cornerHeight, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottomRight"), tint, false);
 
             if (!drew)
             {
@@ -652,8 +713,15 @@ namespace POTCO.Inventory
                 DrawFilledRect(new Rect(tabRect.x, tabRect.y, tabRect.width, borderHeight), outer);
                 DrawFilledRect(new Rect(tabRect.x, tabRect.yMax - borderHeight, tabRect.width, borderHeight), outer);
                 DrawFilledRect(new Rect(tabRect.x, tabRect.y, borderWidth, tabRect.height), outer);
-                DrawFilledRect(new Rect(tabRect.xMax - borderWidth, tabRect.y, borderWidth, tabRect.height), Color.black);
+                DrawReferenceLeftTabRightEdge(tabRect, borderWidth);
             }
+        }
+
+        private static bool DrawReferenceLeftTabRightEdge(Rect tabRect, float borderWidth)
+        {
+            Rect rightEdge = new Rect(tabRect.xMax - borderWidth, tabRect.y, borderWidth, tabRect.height);
+            DrawFilledRect(rightEdge, Color.black);
+            return true;
         }
 
         private static void DrawReferenceChestTabBackground(Rect tabRect, float borderWidth, float borderHeight)
@@ -677,7 +745,12 @@ namespace POTCO.Inventory
                     return 0.22f;
                 case PotcoChestPageKind.JewelryAndTattoos:
                 case PotcoChestPageKind.PotionsPouch:
+                case PotcoChestPageKind.Materials:
                     return 0.12f;
+                case PotcoChestPageKind.Ammo:
+                    return 0.14f;
+                case PotcoChestPageKind.Cards:
+                    return 0.4f;
                 case PotcoChestPageKind.Treasure:
                     return 0.2f;
                 default:
@@ -691,6 +764,7 @@ namespace POTCO.Inventory
             {
                 case PotcoChestPageKind.WeaponBelt:
                 case PotcoChestPageKind.Garb:
+                case PotcoChestPageKind.Cards:
                 case PotcoChestPageKind.Treasure:
                     return ReferenceTopLevelIconLocalExtent;
                 default:
@@ -827,6 +901,11 @@ namespace POTCO.Inventory
                     return ReferenceJewelryBagPosition;
                 case PotcoChestPageKind.PotionsPouch:
                     return ReferencePotionBagPosition;
+                case PotcoChestPageKind.Ammo:
+                case PotcoChestPageKind.Materials:
+                    return ReferenceAmmoBagPosition;
+                case PotcoChestPageKind.Cards:
+                    return ReferenceCardsBagPosition;
                 case PotcoChestPageKind.WeaponBelt:
                 default:
                     return ReferenceWeaponBagPosition;
@@ -885,13 +964,7 @@ namespace POTCO.Inventory
             Event current = Event.current;
             bool trashHover = current != null && trashRect.Contains(current.mousePosition);
             DrawReferenceInventoryCellFrame(trashRect, trashHover);
-            DrawReferenceGuiSprite(
-                reference,
-                PotcoRuntimeGuiAssetResolver.TopLevelGui,
-                trashHover ? "pir_t_gui_but_trash_over" : "pir_t_gui_but_trash",
-                trashCenter,
-                Vector2.one * ReferenceTrashGeomScale,
-                Color.white);
+            DrawReferenceBottomControlSprite(reference, PotcoRuntimeGuiAssetResolver.TopLevelGui, trashHover ? "pir_t_gui_but_trash_over" : "pir_t_gui_but_trash", trashCenter, Vector2.one * ReferenceTrashGeomScale, true);
             if (GUI.Button(trashRect, GUIContent.none, GUIStyle.none) && selectedLocation != PotcoInventoryLocations.InvalidLocation)
                 TrashSelected();
 
@@ -946,8 +1019,19 @@ namespace POTCO.Inventory
             Rect cellRect = reference.RectFromCenter(referenceCenter, ReferenceButtonSize, ReferenceButtonSize);
             Event current = Event.current;
             bool hover = current != null && cellRect.Contains(current.mousePosition);
-            if (!DrawTextureSprite(cellRect, hover ? PotcoChestTextureSkin.SkillBaseOver : PotcoChestTextureSkin.SkillBase, Color.white))
+            if (!DrawReferenceGuiSprite(
+                    reference,
+                    PotcoRuntimeGuiAssetResolver.SkillIconsGui,
+                    hover ? "base_over" : "base",
+                    referenceCenter,
+                    Vector2.one * ReferenceButtonSize,
+                    Color.white,
+                    false,
+                    true) &&
+                !DrawTextureSprite(cellRect, hover ? PotcoChestTextureSkin.SkillBaseOver : PotcoChestTextureSkin.SkillBase, Color.white))
+            {
                 DrawReferenceInventoryCellFrame(cellRect, hover);
+            }
 
             DrawReferenceGuiSprite(
                 reference,
@@ -965,7 +1049,7 @@ namespace POTCO.Inventory
 
         private bool DrawReferenceInventoryButton(GuiReferenceLayout reference, Vector2 referenceCenter, string text)
         {
-            Rect hitRect = reference.RectFromCenter(referenceCenter, 0.31f, 0.095f);
+            Rect hitRect = reference.RectFromCenter(referenceCenter, ReferenceCharGuiButtonWidth, ReferenceCharGuiButtonHeight);
             Event current = Event.current;
             bool hover = current != null && hitRect.Contains(current.mousePosition);
             bool pressed = hover && current != null && current.type == EventType.MouseDown && current.button == 0;
@@ -973,16 +1057,31 @@ namespace POTCO.Inventory
                 ? PotcoChestTextureSkin.CharGuiTextBlockLargeDown
                 : (hover ? PotcoChestTextureSkin.CharGuiTextBlockLargeOver : PotcoChestTextureSkin.CharGuiTextBlockLarge);
 
-            if (!DrawReferenceGuiSprite(reference, PotcoRuntimeGuiAssetResolver.CharGui, GetReferenceInventoryButtonGroupName(spriteName), referenceCenter, Vector2.one * ReferenceCharGuiButtonScale, Color.white))
+            if (!DrawTextureSprite(hitRect, spriteName, Color.white) &&
+                !DrawReferenceColorOnlySprite(reference, PotcoRuntimeGuiAssetResolver.CharGui, GetReferenceInventoryButtonGroupName(spriteName), referenceCenter, Vector2.one * ReferenceCharGuiButtonScale))
             {
-                if (!DrawTextureSprite(hitRect, spriteName, Color.white))
-                    DrawFilledRect(hitRect, GUI.enabled ? new Color(0.16f, 0.10f, 0.06f, 0.95f) : new Color(0.10f, 0.09f, 0.08f, 0.95f));
+                DrawFilledRect(hitRect, GUI.enabled ? new Color(0.16f, 0.10f, 0.06f, 0.95f) : new Color(0.10f, 0.09f, 0.08f, 0.95f));
             }
 
             bool clicked = GUI.Button(hitRect, GUIContent.none, GUIStyle.none);
-            Rect textRect = reference.RectFromCenter(referenceCenter + new Vector2(0f, -0.01f), 0.30f, 0.06f);
+            Rect textRect = reference.RectFromCenter(referenceCenter + new Vector2(0f, -0.01f), ReferenceCharGuiButtonWidth * 0.96f, 0.06f);
             GUI.Label(textRect, text, buttonTextStyle);
             return clicked;
+        }
+
+        private bool DrawReferenceBottomControlSprite(GuiReferenceLayout reference, string modelResourcePath, string groupName, Vector2 referenceCenter, Vector2 referenceScale, bool flipAlphaY)
+        {
+            return DrawReferenceGuiSprite(reference, modelResourcePath, groupName, referenceCenter, referenceScale, Color.white, false, flipAlphaY);
+        }
+
+        private bool DrawReferenceColorOnlySprite(GuiReferenceLayout reference, string modelResourcePath, string groupName, Vector2 referenceCenter, Vector2 referenceScale)
+        {
+            PotcoGuiSprite sprite = resolver.ResolveSprite(modelResourcePath, groupName);
+            if (sprite == null || !sprite.IsDefined)
+                return false;
+
+            Rect spriteRect = reference.RectFromLocalBounds(referenceCenter, referenceScale, sprite.LocalBounds);
+            return DrawGuiSpriteColorOnly(spriteRect, sprite, Color.white);
         }
 
         private static string GetReferenceInventoryButtonGroupName(string spriteName)
@@ -1031,6 +1130,9 @@ namespace POTCO.Inventory
                 layout.GetPage(PotcoChestPageKind.Garb),
                 layout.GetPage(PotcoChestPageKind.JewelryAndTattoos),
                 layout.GetPage(PotcoChestPageKind.PotionsPouch),
+                layout.GetPage(PotcoChestPageKind.Ammo),
+                layout.GetPage(PotcoChestPageKind.Materials),
+                layout.GetPage(PotcoChestPageKind.Cards),
                 layout.GetPage(PotcoChestPageKind.Treasure)
             };
         }
@@ -1147,6 +1249,7 @@ namespace POTCO.Inventory
                 PotcoRuntimeGuiAssetResolver.InventoryIconsGui,
                 PotcoRuntimeGuiAssetResolver.JewelryIconsGui,
                 PotcoRuntimeGuiAssetResolver.ShopIconsGui,
+                PotcoRuntimeGuiAssetResolver.ShipMaterialIconsGui,
                 PotcoRuntimeGuiAssetResolver.SkillIconsGui,
                 PotcoRuntimeGuiAssetResolver.BuffIconsGui
             };
@@ -1242,6 +1345,28 @@ namespace POTCO.Inventory
                 }
 
                 DrawTextureWithTexCoords(target, part.Texture, part.AlphaTexture, texCoords, tint, flipAlphaY);
+                drew = true;
+            }
+
+            return drew;
+        }
+
+        private bool DrawGuiSpriteColorOnly(Rect rect, PotcoGuiSprite sprite, Color tint)
+        {
+            if (sprite == null || !sprite.IsDefined)
+                return false;
+
+            bool drew = false;
+            foreach (PotcoGuiSpritePart part in sprite.Parts)
+            {
+                if (part == null || part.Texture == null)
+                    continue;
+
+                Rect target = ProjectSpritePart(rect, sprite.LocalBounds, part.LocalRect);
+                if (target.width < 0.5f || target.height < 0.5f)
+                    continue;
+
+                DrawTextureWithTexCoords(target, part.Texture, null, part.TexCoords, tint);
                 drew = true;
             }
 
@@ -1477,6 +1602,7 @@ namespace POTCO.Inventory
                 PotcoRuntimeGuiAssetResolver.InventoryIconsGui,
                 PotcoRuntimeGuiAssetResolver.JewelryIconsGui,
                 PotcoRuntimeGuiAssetResolver.ShopIconsGui,
+                PotcoRuntimeGuiAssetResolver.ShipMaterialIconsGui,
                 PotcoRuntimeGuiAssetResolver.SkillIconsGui,
                 PotcoRuntimeGuiAssetResolver.BuffIconsGui
             };

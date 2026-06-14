@@ -121,9 +121,9 @@ namespace POTCO.Inventory
             skin.AddDirect(GenericButton, "phase_2/maps/pir_t_gui_but_generic", "phase_2/maps/pir_t_gui_but_generic_a");
             skin.AddDirect(GenericButtonOver, "phase_2/maps/pir_t_gui_but_generic_over", "phase_2/maps/pir_t_gui_but_generic_over_a");
             skin.AddDirect(GenericButtonDisabled, "phase_2/maps/pir_t_gui_but_generic_disabled", "phase_2/maps/pir_t_gui_but_generic_disabled_a");
-            skin.Add(CharGuiTextBlockLarge, PotcoRuntimeGuiAssetResolver.CharGui, "chargui_text_block_large");
-            skin.Add(CharGuiTextBlockLargeOver, PotcoRuntimeGuiAssetResolver.CharGui, "chargui_text_block_large_over");
-            skin.Add(CharGuiTextBlockLargeDown, PotcoRuntimeGuiAssetResolver.CharGui, "chargui_text_block_large_down");
+            skin.AddDirect(CharGuiTextBlockLarge, "phase_2/maps/chargui_text_block_large", "phase_2/maps/chargui_text_block_large_a");
+            skin.AddDirect(CharGuiTextBlockLargeOver, "phase_2/maps/chargui_text_block_large_over", "phase_2/maps/chargui_text_block_large_over_a");
+            skin.AddDirect(CharGuiTextBlockLargeDown, "phase_2/maps/chargui_text_block_large_down", "phase_2/maps/chargui_text_block_large_down_a");
             skin.Add(SkillBase, PotcoRuntimeGuiAssetResolver.SkillIconsGui, "base");
             skin.Add(SkillBaseOver, PotcoRuntimeGuiAssetResolver.SkillIconsGui, "base_over");
             return skin;

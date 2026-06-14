@@ -10,6 +10,9 @@ namespace POTCO.Inventory
         Garb,
         JewelryAndTattoos,
         PotionsPouch,
+        Ammo,
+        Materials,
+        Cards,
         Treasure
     }
 
@@ -56,6 +59,9 @@ namespace POTCO.Inventory
                 new PotcoChestPageLayout(PotcoChestPageKind.Garb, "Garb", "topgui_icon_clothing", PotcoInventoryLocations.ClothingBag, 5, 7),
                 new PotcoChestPageLayout(PotcoChestPageKind.JewelryAndTattoos, "Jewelry & Tattoos", "pir_t_gui_gen_trinket", PotcoInventoryLocations.JewelryAndTattooBag, 4, 7),
                 new PotcoChestPageLayout(PotcoChestPageKind.PotionsPouch, "Potions Pouch", "pir_t_ico_pot_elixir", PotcoInventoryLocations.ConsumableBag, 6, 7),
+                new PotcoChestPageLayout(PotcoChestPageKind.Ammo, "Ammo", "pir_t_ico_can_ammoBarrel", PotcoInventoryLocations.MiscBag, 7, 5),
+                new PotcoChestPageLayout(PotcoChestPageKind.Materials, "Materials", "pir_t_gui_sc_container", PotcoInventoryLocations.MiscBag, 7, 5),
+                new PotcoChestPageLayout(PotcoChestPageKind.Cards, "Cards", "treasure_w_card", PotcoInventoryLocations.MiscBag, 4, 9),
                 new PotcoChestPageLayout(PotcoChestPageKind.Treasure, "Treasure", "topgui_icon_treasure", PotcoInventoryLocations.Gold, 1, 1)
             });
         }

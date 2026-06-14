@@ -95,6 +95,7 @@ namespace POTCO.Inventory
         public const string SkillIconsGui = "phase_2/models/textureCards/skillIcons";
         public const string BuffIconsGui = "phase_2/models/textureCards/buff_icons";
         public const string ShopIconsGui = "phase_2/models/textureCards/shopIcons";
+        public const string ShipMaterialIconsGui = "phase_2/models/textureCards/shipMaterialIcons";
         public const string TailorIconsGui = "phase_2/models/textureCards/tailorIcons";
         public const string TattooIconsGui = "phase_2/models/textureCards/tattooIcons";
         public const string TattoosGui = "phase_2/models/misc/tattoos";
