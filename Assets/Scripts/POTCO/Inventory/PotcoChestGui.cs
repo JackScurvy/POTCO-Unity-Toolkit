@@ -677,63 +677,138 @@ namespace POTCO.Inventory
             if (tabRect.width <= 0f || tabRect.height <= 0f)
                 return;
 
+            float unitScale = tabRect.width / ReferenceSideTabWidth;
             float borderWidth = Mathf.Clamp(
-                tabRect.width * (ReferenceChestTabBorderScale * ReferenceGeneralFrameEdgeThickness / ReferenceChestTabFrameWidth),
+                unitScale * ReferenceChestTabBorderScale * ReferenceGeneralFrameEdgeThickness,
                 4f,
                 tabRect.width * 0.35f);
             float borderHeight = Mathf.Clamp(
-                tabRect.height * (ReferenceChestTabBorderScale * ReferenceGeneralFrameEdgeThickness / ReferenceChestTabFrameHeight),
+                unitScale * ReferenceChestTabBorderScale * ReferenceGeneralFrameEdgeThickness,
                 4f,
                 tabRect.height * 0.35f);
             float cornerWidth = Mathf.Clamp(
-                tabRect.width * (ReferenceChestTabCornerWidth * ReferenceGeneralFrameEdgeThickness / ReferenceChestTabFrameWidth),
+                unitScale * ReferenceChestTabBorderScale * ReferenceChestTabCornerWidth,
                 5f,
-                tabRect.width * 0.22f);
+                tabRect.width * 0.35f);
             float cornerHeight = Mathf.Clamp(
-                tabRect.height * (ReferenceChestTabCornerWidth * ReferenceGeneralFrameEdgeThickness / ReferenceChestTabFrameHeight),
+                unitScale * ReferenceChestTabBorderScale * ReferenceChestTabCornerWidth,
                 5f,
-                tabRect.height * 0.22f);
+                tabRect.height * 0.35f);
             Color tint = Color.white;
-            DrawReferenceChestTabBackground(tabRect, borderWidth, borderHeight);
+            Rect topRect = new Rect(
+                tabRect.x + cornerWidth,
+                tabRect.y,
+                Mathf.Max(0f, tabRect.width - cornerWidth * 2f),
+                borderHeight);
+            Rect bottomRect = new Rect(
+                tabRect.x + cornerWidth,
+                tabRect.yMax - borderHeight,
+                Mathf.Max(0f, tabRect.width - cornerWidth * 2f),
+                borderHeight);
+            Rect leftRect = new Rect(
+                tabRect.x,
+                tabRect.y + cornerHeight,
+                borderWidth,
+                Mathf.Max(0f, tabRect.height - cornerHeight * 2f));
+            Rect topLeftRect = new Rect(tabRect.x, tabRect.y, cornerWidth, cornerHeight);
+            Rect topRightRect = new Rect(tabRect.xMax - cornerWidth, tabRect.y, cornerWidth, cornerHeight);
+            Rect bottomLeftRect = new Rect(tabRect.x, tabRect.yMax - cornerHeight, cornerWidth, cornerHeight);
+            Rect bottomRightRect = new Rect(tabRect.xMax - cornerWidth, tabRect.yMax - cornerHeight, cornerWidth, cornerHeight);
+
+            DrawReferenceLeftTabBlackPieces(tabRect, borderWidth, borderHeight, cornerWidth, cornerHeight);
+
+            float horizontalTexScale = Mathf.Max(0f, ReferenceChestTabFrameWidth / ReferenceChestTabBorderScale - ReferenceChestTabCornerWidth * 2f);
+            float inactiveVerticalTexScale = Mathf.Max(0f, ReferenceChestTabFrameHeight / ReferenceChestTabBorderScale - ReferenceChestTabCornerWidth * 2f);
+            float activeVerticalTexScale = Mathf.Max(0f, ReferenceSideTabActiveHeight / ReferenceChestTabBorderScale - ReferenceChestTabCornerWidth * 2f);
+            float verticalTexScale = emphasized ? activeVerticalTexScale : inactiveVerticalTexScale;
 
             bool drew =
-                DrawRegion(new Rect(tabRect.x, tabRect.y, tabRect.width, borderHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "top1"), tint, false) |
-                DrawRegion(new Rect(tabRect.x, tabRect.yMax - borderHeight, tabRect.width, borderHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottom"), tint, false) |
-                DrawRegion(new Rect(tabRect.x, tabRect.y, borderWidth, tabRect.height), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "left"), tint, false) |
-                DrawReferenceLeftTabRightEdge(tabRect, borderWidth) |
-                DrawRegion(new Rect(tabRect.x, tabRect.y, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "topLeft"), tint, false) |
-                DrawRegion(new Rect(tabRect.xMax - cornerWidth, tabRect.y, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "topRight"), tint, false) |
-                DrawRegion(new Rect(tabRect.x, tabRect.yMax - cornerHeight, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottomLeft"), tint, false) |
-                DrawRegion(new Rect(tabRect.xMax - cornerWidth, tabRect.yMax - cornerHeight, cornerWidth, cornerHeight), resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottomRight"), tint, false);
+                DrawReferenceHorizontalFrameStrip(topRect, resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "top1"), tint, true, horizontalTexScale) |
+                DrawReferenceHorizontalFrameStrip(bottomRect, resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottom"), tint, false, horizontalTexScale) |
+                DrawReferenceVerticalFrameStrip(leftRect, resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "left"), tint, verticalTexScale) |
+                DrawRegion(topLeftRect, resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "topLeft"), tint, false) |
+                DrawRegion(topRightRect, resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "topRight"), tint, false) |
+                DrawRegion(bottomLeftRect, resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottomLeft"), tint, false) |
+                DrawRegion(bottomRightRect, resolver.ResolveRegion(PotcoChestNativeGuiLayer.GeneralFrameDGui, "bottomRight"), tint, false);
 
             if (!drew)
             {
                 Color outer = emphasized ? new Color(0.82f, 0.79f, 0.62f, 1f) : new Color(0.52f, 0.50f, 0.40f, 1f);
-                DrawReferenceChestTabBackground(tabRect, borderWidth, borderHeight);
-                DrawFilledRect(new Rect(tabRect.x, tabRect.y, tabRect.width, borderHeight), outer);
-                DrawFilledRect(new Rect(tabRect.x, tabRect.yMax - borderHeight, tabRect.width, borderHeight), outer);
-                DrawFilledRect(new Rect(tabRect.x, tabRect.y, borderWidth, tabRect.height), outer);
-                DrawReferenceLeftTabRightEdge(tabRect, borderWidth);
+                DrawFilledRect(topRect, outer);
+                DrawFilledRect(bottomRect, outer);
+                DrawFilledRect(leftRect, outer);
+                DrawFilledRect(topLeftRect, outer);
+                DrawFilledRect(topRightRect, outer);
+                DrawFilledRect(bottomLeftRect, outer);
+                DrawFilledRect(bottomRightRect, outer);
             }
         }
 
-        private static bool DrawReferenceLeftTabRightEdge(Rect tabRect, float borderWidth)
+        private static void DrawReferenceLeftTabBlackPieces(Rect tabRect, float borderWidth, float borderHeight, float cornerWidth, float cornerHeight)
         {
-            Rect rightEdge = new Rect(tabRect.xMax - borderWidth, tabRect.y, borderWidth, tabRect.height);
-            DrawFilledRect(rightEdge, Color.black);
+            Rect backgroundRect = new Rect(
+                tabRect.x + cornerWidth,
+                tabRect.y + borderHeight,
+                Mathf.Max(0f, tabRect.width - cornerWidth * 2f),
+                Mathf.Max(0f, tabRect.height - borderHeight * 2f));
+            Rect rightRect = new Rect(
+                tabRect.xMax - borderWidth,
+                tabRect.y + cornerHeight,
+                borderWidth,
+                Mathf.Max(0f, tabRect.height - cornerHeight * 2f));
+
+            DrawFilledRect(backgroundRect, Color.black);
+            DrawFilledRect(rightRect, Color.black);
+        }
+
+        private bool DrawReferenceHorizontalFrameStrip(Rect rect, PotcoGuiRegion region, Color tint, bool top, float texScale)
+        {
+            if (region == null || !region.IsDefined || region.Texture == null)
+                return false;
+
+            Rect uv = region.TexCoords;
+            Vector2 topLeft;
+            Vector2 topRight;
+            Vector2 bottomRight;
+            Vector2 bottomLeft;
+            if (top)
+            {
+                topLeft = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMax, uv.yMax), texScale);
+                topRight = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMax, uv.yMin), texScale);
+                bottomRight = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMin, uv.yMin), texScale);
+                bottomLeft = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMin, uv.yMax), texScale);
+            }
+            else
+            {
+                topLeft = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMin, uv.yMin), texScale);
+                topRight = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMin, uv.yMax), texScale);
+                bottomRight = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMax, uv.yMax), texScale);
+                bottomLeft = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMax, uv.yMin), texScale);
+            }
+
+            DrawRegionQuad(rect, region, topLeft, topRight, bottomRight, bottomLeft, tint);
             return true;
         }
 
-        private static void DrawReferenceChestTabBackground(Rect tabRect, float borderWidth, float borderHeight)
+        private bool DrawReferenceVerticalFrameStrip(Rect rect, PotcoGuiRegion region, Color tint, float texScale)
         {
-            float xInset = Mathf.Clamp(borderWidth * 0.75f, 3f, tabRect.width * 0.35f);
-            float yInset = Mathf.Clamp(borderHeight * 0.75f, 3f, tabRect.height * 0.35f);
-            Rect backgroundRect = new Rect(
-                tabRect.x + xInset,
-                tabRect.y + yInset,
-                Mathf.Max(0f, tabRect.width - xInset * 1.25f),
-                Mathf.Max(0f, tabRect.height - yInset * 2f));
-            DrawFilledRect(backgroundRect, Color.black);
+            if (region == null || !region.IsDefined || region.Texture == null)
+                return false;
+
+            Rect uv = region.TexCoords;
+            Vector2 topLeft = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMax, uv.yMin), texScale);
+            Vector2 topRight = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMin, uv.yMin), texScale);
+            Vector2 bottomRight = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMin, uv.yMax), texScale);
+            Vector2 bottomLeft = ApplyReferenceFrameSideTexTransform(new Vector2(uv.xMax, uv.yMax), texScale);
+
+            DrawRegionQuad(rect, region, topLeft, topRight, bottomRight, bottomLeft, tint);
+            return true;
+        }
+
+        private static Vector2 ApplyReferenceFrameSideTexTransform(Vector2 uv, float texScale)
+        {
+            float offset = -(texScale - 1f) * 0.5f;
+            return new Vector2(uv.x, uv.y * texScale + offset);
         }
 
         private static float GetReferencePageIconScale(PotcoChestPageKind pageKind)
@@ -1432,6 +1507,52 @@ namespace POTCO.Inventory
             GUI.color = tint;
             GUI.DrawTextureWithTexCoords(rect, texture, texCoords, true);
             GUI.color = old;
+        }
+
+        private void DrawRegionQuad(
+            Rect rect,
+            PotcoGuiRegion region,
+            Vector2 topLeftUv,
+            Vector2 topRightUv,
+            Vector2 bottomRightUv,
+            Vector2 bottomLeftUv,
+            Color tint)
+        {
+            Event current = Event.current;
+            if (current != null && current.type != EventType.Repaint)
+                return;
+
+            Texture2D alphaTexture = region.AlphaTexture != null ? region.AlphaTexture : Texture2D.whiteTexture;
+            Material material = GetGuiAlphaMaterial(alphaTexture, false);
+            if (material == null)
+                return;
+
+            material.SetTexture("_MainTex", region.Texture);
+            material.SetTexture("_AlphaTex", alphaTexture);
+            material.SetFloat("_FlipAlphaY", 0f);
+
+            GL.PushMatrix();
+            GL.LoadPixelMatrix(0f, Screen.width, Screen.height, 0f);
+            material.SetPass(0);
+            GL.Begin(GL.TRIANGLES);
+            GL.Color(tint);
+
+            GL.TexCoord2(topLeftUv.x, topLeftUv.y);
+            GL.Vertex3(rect.xMin, rect.yMin, 0f);
+            GL.TexCoord2(bottomLeftUv.x, bottomLeftUv.y);
+            GL.Vertex3(rect.xMin, rect.yMax, 0f);
+            GL.TexCoord2(topRightUv.x, topRightUv.y);
+            GL.Vertex3(rect.xMax, rect.yMin, 0f);
+
+            GL.TexCoord2(topRightUv.x, topRightUv.y);
+            GL.Vertex3(rect.xMax, rect.yMin, 0f);
+            GL.TexCoord2(bottomLeftUv.x, bottomLeftUv.y);
+            GL.Vertex3(rect.xMin, rect.yMax, 0f);
+            GL.TexCoord2(bottomRightUv.x, bottomRightUv.y);
+            GL.Vertex3(rect.xMax, rect.yMax, 0f);
+
+            GL.End();
+            GL.PopMatrix();
         }
 
         private Material GetGuiAlphaMaterial(Texture2D alphaTexture, bool flipAlphaY)
