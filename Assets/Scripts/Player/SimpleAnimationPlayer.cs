@@ -86,6 +86,18 @@ namespace Player
         private string weaponStrafeRightAnimation = "";
         private float externalAnimationLockUntil = 0f;
         private bool externalUpperBodyOverlayActive = false;
+        private bool externalAnimationPreferInMotionActive = false;
+        private string externalAnimationRequestName = "";
+        private string externalAnimationRegisteredName = "";
+        private WrapMode externalAnimationWrapMode = WrapMode.Once;
+        private float externalAnimationTransition = 0f;
+        private ExternalAnimationRoute externalAnimationRoute = ExternalAnimationRoute.FullBody;
+
+        public enum ExternalAnimationRoute
+        {
+            FullBody,
+            UpperBodyOverlay
+        }
 
         private void Awake()
         {
@@ -294,13 +306,19 @@ namespace Player
             if (controller == null) return;
 
             bool externalAnimationLocked = externalAnimationLockUntil > Time.time;
-            if (externalUpperBodyOverlayActive && !externalAnimationLocked)
+            if (externalAnimationLocked && externalAnimationPreferInMotionActive)
             {
-                animComponent.StopUpperBodyOverlay(transitionDuration);
-                externalUpperBodyOverlayActive = false;
+                UpdateExternalAnimationRoute(controller);
+            }
+            else if (!externalAnimationLocked)
+            {
+                if (externalUpperBodyOverlayActive)
+                    animComponent.StopUpperBodyOverlay(transitionDuration);
+
+                ClearExternalAnimationRouteState();
             }
 
-            if (externalAnimationLocked && !externalUpperBodyOverlayActive)
+            if (!ShouldUpdateLocomotionDuringExternalAnimation(externalAnimationLocked, externalAnimationRoute))
                 return;
 
             // Check if landing animation has finished
@@ -1147,6 +1165,7 @@ namespace Player
             weaponStrafeRightAnimation = "";
             externalAnimationLockUntil = 0f;
             externalUpperBodyOverlayActive = false;
+            ClearExternalAnimationRouteState();
             if (animComponent != null)
                 animComponent.StopUpperBodyOverlay(0.05f);
         }
@@ -1176,10 +1195,24 @@ namespace Player
             if (!RegisterOptionalClip(animName, wrapMode, useMotionVariant, out string registeredAnimName))
                 return false;
 
-            bool useUpperBodyOverlay = ShouldUseUpperBodyExternalAnimation(preferInMotionVariant, isMoving);
-            if (useUpperBodyOverlay)
+            ExternalAnimationRoute route = ResolveExternalAnimationRoute(preferInMotionVariant, isMoving);
+            bool preserveVariantTime = ShouldPreserveExternalAnimationTimeOnVariantChange(
+                preferInMotionVariant,
+                restartIfAlreadyPlaying,
+                externalAnimationRequestName,
+                animName,
+                externalAnimationRegisteredName,
+                registeredAnimName);
+            double preservedTime = preserveVariantTime
+                ? ResolveExternalAnimationRouteSwitchTime(externalAnimationRegisteredName, registeredAnimName)
+                : 0d;
+
+            if (route == ExternalAnimationRoute.UpperBodyOverlay)
             {
-                animComponent.CrossFadeUpperBody(registeredAnimName, Mathf.Max(0f, transition), restartIfAlreadyPlaying);
+                if (preserveVariantTime)
+                    animComponent.CrossFadeUpperBody(registeredAnimName, Mathf.Max(0f, transition), false, preservedTime);
+                else
+                    animComponent.CrossFadeUpperBody(registeredAnimName, Mathf.Max(0f, transition), restartIfAlreadyPlaying);
             }
             else
             {
@@ -1187,17 +1220,26 @@ namespace Player
                     animComponent.StopUpperBodyOverlay(Mathf.Max(0f, transition));
 
                 float blendWeight = ResolveExternalAnimationBlendWeight(preferInMotionVariant, isMoving);
-                animComponent.CrossFade(registeredAnimName, Mathf.Max(0f, transition), restartIfAlreadyPlaying, blendWeight);
+                if (preserveVariantTime)
+                    animComponent.CrossFadeAtTime(registeredAnimName, Mathf.Max(0f, transition), false, blendWeight, preservedTime);
+                else
+                    animComponent.CrossFade(registeredAnimName, Mathf.Max(0f, transition), restartIfAlreadyPlaying, blendWeight);
                 currentAnim = registeredAnimName;
             }
 
-            externalUpperBodyOverlayActive = useUpperBodyOverlay;
+            externalUpperBodyOverlayActive = route == ExternalAnimationRoute.UpperBodyOverlay;
+            externalAnimationRoute = route;
+            externalAnimationRequestName = preferInMotionVariant ? animName : "";
+            externalAnimationRegisteredName = registeredAnimName;
+            externalAnimationWrapMode = wrapMode;
+            externalAnimationTransition = Mathf.Max(0f, transition);
             AnimationClip clip = animComponent.GetClip(registeredAnimName);
             float lockDuration = ResolveExternalAnimationLockSeconds(lockSeconds, clip != null ? clip.length : 0f, wrapMode, maxLockSeconds);
             if (lockDuration > 0f)
                 externalAnimationLockUntil = Time.time + lockDuration;
             else
                 externalAnimationLockUntil = 0f;
+            externalAnimationPreferInMotionActive = preferInMotionVariant && lockDuration > 0f;
             return true;
         }
 
@@ -1228,7 +1270,121 @@ namespace Player
 
         public static bool ShouldUseUpperBodyExternalAnimation(bool preferInMotionVariant, bool isMoving)
         {
-            return preferInMotionVariant;
+            return ResolveExternalAnimationRoute(preferInMotionVariant, isMoving) == ExternalAnimationRoute.UpperBodyOverlay;
+        }
+
+        public static ExternalAnimationRoute ResolveExternalAnimationRoute(bool preferInMotionVariant, bool isMoving)
+        {
+            return preferInMotionVariant && isMoving
+                ? ExternalAnimationRoute.UpperBodyOverlay
+                : ExternalAnimationRoute.FullBody;
+        }
+
+        public static bool ShouldUpdateLocomotionDuringExternalAnimation(bool externalAnimationLocked, ExternalAnimationRoute route)
+        {
+            return !externalAnimationLocked || route == ExternalAnimationRoute.UpperBodyOverlay;
+        }
+
+        public static bool ShouldPreserveExternalAnimationTimeOnVariantChange(
+            bool preferInMotionVariant,
+            bool restartIfAlreadyPlaying,
+            string previousRequestName,
+            string nextRequestName,
+            string previousRegisteredName,
+            string nextRegisteredName)
+        {
+            if (!preferInMotionVariant || restartIfAlreadyPlaying)
+                return false;
+
+            if (string.IsNullOrEmpty(previousRequestName) ||
+                string.IsNullOrEmpty(nextRequestName) ||
+                string.IsNullOrEmpty(previousRegisteredName) ||
+                string.IsNullOrEmpty(nextRegisteredName))
+            {
+                return false;
+            }
+
+            return string.Equals(previousRequestName, nextRequestName, System.StringComparison.Ordinal) &&
+                   !string.Equals(previousRegisteredName, nextRegisteredName, System.StringComparison.Ordinal);
+        }
+
+        private void UpdateExternalAnimationRoute(ControllerAdapter controller)
+        {
+            if (animComponent == null || string.IsNullOrEmpty(externalAnimationRequestName))
+                return;
+
+            bool isMoving = ShouldPreferInMotionExternalAnimation(controller);
+            ExternalAnimationRoute nextRoute = ResolveExternalAnimationRoute(true, isMoving);
+            bool useMotionVariant = nextRoute == ExternalAnimationRoute.UpperBodyOverlay;
+            if (!RegisterOptionalClip(externalAnimationRequestName, externalAnimationWrapMode, useMotionVariant, out string nextRegisteredName))
+                return;
+
+            bool routeChanged = nextRoute != externalAnimationRoute ||
+                                !string.Equals(nextRegisteredName, externalAnimationRegisteredName, System.StringComparison.Ordinal);
+            if (!routeChanged)
+            {
+                if (nextRoute == ExternalAnimationRoute.UpperBodyOverlay && !externalUpperBodyOverlayActive)
+                {
+                    double resumeTime = ResolveExternalAnimationRouteSwitchTime(externalAnimationRegisteredName, nextRegisteredName);
+                    animComponent.CrossFadeUpperBody(nextRegisteredName, externalAnimationTransition, false, resumeTime);
+                    externalUpperBodyOverlayActive = true;
+                }
+
+                return;
+            }
+
+            double startTime = ResolveExternalAnimationRouteSwitchTime(externalAnimationRegisteredName, nextRegisteredName);
+            if (nextRoute == ExternalAnimationRoute.UpperBodyOverlay)
+            {
+                animComponent.CrossFadeUpperBody(nextRegisteredName, externalAnimationTransition, false, startTime);
+                externalUpperBodyOverlayActive = true;
+            }
+            else
+            {
+                if (externalUpperBodyOverlayActive)
+                    animComponent.StopUpperBodyOverlay(externalAnimationTransition);
+
+                animComponent.CrossFadeAtTime(nextRegisteredName, externalAnimationTransition, false, 1f, startTime);
+                currentAnim = nextRegisteredName;
+                externalUpperBodyOverlayActive = false;
+            }
+
+            externalAnimationRoute = nextRoute;
+            externalAnimationRegisteredName = nextRegisteredName;
+        }
+
+        private double ResolveExternalAnimationRouteSwitchTime(string previousClipName, string nextClipName)
+        {
+            if (!string.IsNullOrEmpty(previousClipName))
+            {
+                if (externalUpperBodyOverlayActive && animComponent.TryGetUpperBodyClipTime(previousClipName, out double upperBodyTime))
+                    return upperBodyTime;
+
+                if (animComponent.TryGetClipTime(previousClipName, out double baseTime))
+                    return baseTime;
+            }
+
+            if (!string.IsNullOrEmpty(nextClipName))
+            {
+                if (animComponent.TryGetUpperBodyClipTime(nextClipName, out double upperBodyTime))
+                    return upperBodyTime;
+
+                if (animComponent.TryGetClipTime(nextClipName, out double baseTime))
+                    return baseTime;
+            }
+
+            return 0d;
+        }
+
+        private void ClearExternalAnimationRouteState()
+        {
+            externalUpperBodyOverlayActive = false;
+            externalAnimationPreferInMotionActive = false;
+            externalAnimationRequestName = "";
+            externalAnimationRegisteredName = "";
+            externalAnimationWrapMode = WrapMode.Once;
+            externalAnimationTransition = 0f;
+            externalAnimationRoute = ExternalAnimationRoute.FullBody;
         }
 
         private bool RegisterOptionalClip(string animName, WrapMode wrapMode)
@@ -1272,14 +1428,41 @@ namespace Player
 
         private bool ShouldPreferInMotionExternalAnimation()
         {
-            ControllerAdapter controller = GetActiveController();
-            if (controller == null || controller.IsSwimming || !controller.IsGrounded)
+            return ShouldPreferInMotionExternalAnimation(GetActiveController());
+        }
+
+        private static bool ShouldPreferInMotionExternalAnimation(ControllerAdapter controller)
+        {
+            if (controller == null)
                 return false;
 
-            Vector3 planarVelocity = new Vector3(controller.Velocity.x, 0f, controller.Velocity.z);
-            return controller.MoveInput.magnitude > 0.1f ||
-                   Mathf.Abs(controller.StrafeInput) > 0.1f ||
-                   controller.CurrentSpeed > 0.1f ||
+            return ShouldPreferInMotionExternalAnimation(
+                controller.IsSwimming,
+                controller.IsGrounded,
+                controller.MoveInput,
+                controller.StrafeInput,
+                controller.CurrentSpeed,
+                controller.Velocity);
+        }
+
+        public static bool ShouldPreferInMotionExternalAnimation(
+            bool isSwimming,
+            bool isGrounded,
+            Vector2 moveInput,
+            float strafeInput,
+            float currentSpeed,
+            Vector3 velocity)
+        {
+            if (isSwimming)
+                return false;
+
+            if (!isGrounded)
+                return true;
+
+            Vector3 planarVelocity = new Vector3(velocity.x, 0f, velocity.z);
+            return moveInput.magnitude > 0.1f ||
+                   Mathf.Abs(strafeInput) > 0.1f ||
+                   currentSpeed > 0.1f ||
                    planarVelocity.magnitude > 0.1f;
         }
 

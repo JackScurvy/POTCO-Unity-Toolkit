@@ -302,6 +302,22 @@ namespace POTCO
 
         public void CrossFade(string clipName, float duration, bool restartIfAlreadyPlaying, float requestedTargetWeight)
         {
+            CrossFadeInternal(clipName, duration, restartIfAlreadyPlaying, requestedTargetWeight, false, 0d);
+        }
+
+        public void CrossFadeAtTime(string clipName, float duration, bool restartIfAlreadyPlaying, float requestedTargetWeight, double startTime)
+        {
+            CrossFadeInternal(clipName, duration, restartIfAlreadyPlaying, requestedTargetWeight, true, startTime);
+        }
+
+        private void CrossFadeInternal(
+            string clipName,
+            float duration,
+            bool restartIfAlreadyPlaying,
+            float requestedTargetWeight,
+            bool useStartTime,
+            double startTime)
+        {
             if (!isInitialized)
             {
                 Debug.LogError($"❌ RuntimeAnimatorPlayer not initialized on {gameObject.name}");
@@ -320,7 +336,7 @@ namespace POTCO
             // Check if target clip already has weight > 0.9 (basically fully playing)
             int targetIndex = clipIndices[clipName];
             float targetWeight = mixer.GetInputWeight(targetIndex);
-            if (ShouldSkipCurrentCrossFade(currentClipName, clipName, targetWeight, requestedTargetWeight, restartIfAlreadyPlaying))
+            if (!useStartTime && ShouldSkipCurrentCrossFade(currentClipName, clipName, targetWeight, requestedTargetWeight, restartIfAlreadyPlaying))
             {
                 // Already playing this animation. Do not restart/rebind, or transitions can flash bind pose.
                 currentClipName = clipName;
@@ -331,10 +347,10 @@ namespace POTCO
             // If duration is 0 or very small, just play immediately
             if (duration < 0.01f)
             {
-                if (requestedTargetWeight >= 0.999f)
+                if (requestedTargetWeight >= 0.999f && !useStartTime)
                     Play(clipName);
                 else
-                    crossfadeCoroutine = StartCoroutine(CrossFadeCoroutine(clipName, 0.01f, requestedTargetWeight));
+                    crossfadeCoroutine = StartCoroutine(CrossFadeCoroutine(clipName, 0.01f, requestedTargetWeight, useStartTime, startTime));
                 return;
             }
 
@@ -345,7 +361,7 @@ namespace POTCO
             }
 
             // Start new crossfade
-            crossfadeCoroutine = StartCoroutine(CrossFadeCoroutine(clipName, duration, requestedTargetWeight));
+            crossfadeCoroutine = StartCoroutine(CrossFadeCoroutine(clipName, duration, requestedTargetWeight, useStartTime, startTime));
         }
 
         public static bool ShouldSkipDominantCrossFade(float targetWeight, bool restartIfAlreadyPlaying)
@@ -365,6 +381,16 @@ namespace POTCO
         }
 
         public void CrossFadeUpperBody(string clipName, float duration, bool restartIfAlreadyPlaying)
+        {
+            CrossFadeUpperBodyInternal(clipName, duration, restartIfAlreadyPlaying, false, 0d);
+        }
+
+        public void CrossFadeUpperBody(string clipName, float duration, bool restartIfAlreadyPlaying, double startTime)
+        {
+            CrossFadeUpperBodyInternal(clipName, duration, restartIfAlreadyPlaying, true, startTime);
+        }
+
+        private void CrossFadeUpperBodyInternal(string clipName, float duration, bool restartIfAlreadyPlaying, bool useStartTime, double startTime)
         {
             if (!isInitialized)
             {
@@ -398,7 +424,9 @@ namespace POTCO
             upperBodyFadeCoroutine = StartCoroutine(UpperBodyCrossFadeCoroutine(
                 clipName,
                 Mathf.Max(0.01f, duration),
-                restartClipTime));
+                restartClipTime,
+                useStartTime,
+                startTime));
         }
 
         public void StopUpperBodyOverlay(float duration)
@@ -458,7 +486,12 @@ namespace POTCO
             return true;
         }
 
-        private System.Collections.IEnumerator UpperBodyCrossFadeCoroutine(string toClipName, float duration, bool restartClipTime)
+        private System.Collections.IEnumerator UpperBodyCrossFadeCoroutine(
+            string toClipName,
+            float duration,
+            bool restartClipTime,
+            bool useStartTime,
+            double startTime)
         {
             int toIndex = upperBodyClipIndices[toClipName];
 
@@ -490,7 +523,11 @@ namespace POTCO
             }
 
             var toPlayable = upperBodyClipPlayables[toClipName];
-            if (restartClipTime)
+            if (useStartTime)
+            {
+                toPlayable.SetTime(ClampPlayableTime(toPlayable, startTime));
+            }
+            else if (restartClipTime)
             {
                 toPlayable.SetTime(0);
             }
@@ -558,10 +595,20 @@ namespace POTCO
 
         private System.Collections.IEnumerator CrossFadeCoroutine(string toClipName, float duration)
         {
-            return CrossFadeCoroutine(toClipName, duration, 1f);
+            return CrossFadeCoroutine(toClipName, duration, 1f, false, 0d);
         }
 
         private System.Collections.IEnumerator CrossFadeCoroutine(string toClipName, float duration, float finalToWeight)
+        {
+            return CrossFadeCoroutine(toClipName, duration, finalToWeight, false, 0d);
+        }
+
+        private System.Collections.IEnumerator CrossFadeCoroutine(
+            string toClipName,
+            float duration,
+            float finalToWeight,
+            bool useStartTime,
+            double startTime)
         {
             finalToWeight = Mathf.Clamp01(finalToWeight);
             int toIndex = clipIndices[toClipName];
@@ -668,7 +715,7 @@ namespace POTCO
 
             // Reset target clip to start and play it
             var toPlayable = clipPlayables[toClipName];
-            toPlayable.SetTime(0);
+            toPlayable.SetTime(useStartTime ? ClampPlayableTime(toPlayable, startTime) : 0d);
             toPlayable.Play();
             currentClipName = toClipName;
             currentClipIndex = toIndex;
@@ -767,6 +814,36 @@ namespace POTCO
                 return null;
 
             return clipPlayables[clipName].GetAnimationClip();
+        }
+
+        public bool TryGetClipTime(string clipName, out double time)
+        {
+            return TryGetPlayableTime(clipPlayables, clipName, out time);
+        }
+
+        public bool TryGetUpperBodyClipTime(string clipName, out double time)
+        {
+            return TryGetPlayableTime(upperBodyClipPlayables, clipName, out time);
+        }
+
+        private static bool TryGetPlayableTime(Dictionary<string, AnimationClipPlayable> playables, string clipName, out double time)
+        {
+            time = 0d;
+            if (string.IsNullOrEmpty(clipName) || !playables.TryGetValue(clipName, out AnimationClipPlayable playable))
+                return false;
+
+            time = playable.GetTime();
+            return true;
+        }
+
+        private static double ClampPlayableTime(AnimationClipPlayable playable, double time)
+        {
+            double clamped = System.Math.Max(0d, time);
+            AnimationClip clip = playable.GetAnimationClip();
+            if (clip == null || clip.length <= 0f)
+                return clamped;
+
+            return System.Math.Min(clamped, clip.length);
         }
 
         private AvatarMask BuildUpperBodyAttackMask()

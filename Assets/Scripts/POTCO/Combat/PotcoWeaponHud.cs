@@ -125,6 +125,11 @@ namespace POTCO.Combat
             return rects;
         }
 
+        public static bool ShouldDrawSkillStrip(bool hasCurrentWeapon, bool isWeaponDrawn, int skillCount)
+        {
+            return hasCurrentWeapon && isWeaponDrawn && skillCount > 0;
+        }
+
         private void EnsureStyles()
         {
             if (slotStyle != null)
@@ -171,10 +176,11 @@ namespace POTCO.Combat
 
         private void DrawSkillStrip(Rect screenRect)
         {
-            if (weaponController.CurrentWeapon == null || weaponController.CurrentWeapon.Skills.Count == 0)
+            bool hasCurrentWeapon = weaponController.CurrentWeapon != null;
+            int skillCount = hasCurrentWeapon ? Mathf.Min(9, weaponController.CurrentWeapon.Skills.Count) : 0;
+            if (!ShouldDrawSkillStrip(hasCurrentWeapon, weaponController.IsWeaponDrawn, skillCount))
                 return;
 
-            int skillCount = Mathf.Min(9, weaponController.CurrentWeapon.Skills.Count);
             Rect[] skillRects = BuildSkillRects(screenRect, skillCount, PotcoInventoryLocations.EquipWeapons.Count);
             for (int i = 0; i < skillRects.Length; i++)
             {
@@ -190,10 +196,7 @@ namespace POTCO.Combat
                 if (!DrawSkillIcon(iconRect, skill))
                     GUI.Label(new Rect(rect.x + 3f, rect.y + 14f, rect.width - 6f, rect.height - 17f), skill.Name, labelStyle);
 
-                if (!weaponController.IsWeaponDrawn)
-                    DrawDisabledOverlay(iconRect);
-                else
-                    DrawSkillCooldownOverlay(iconRect, skill);
+                DrawSkillCooldownOverlay(iconRect, skill);
             }
         }
 

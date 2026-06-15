@@ -9,7 +9,7 @@ namespace POTCO.ItemCards
     {
         private const string PreviewCompositeShaderResource = "Shaders/PotcoItemCardPreviewComposite";
         private const int PreviewLayer = 30;
-        private const int PreviewLayerMask = 1 << PreviewLayer;
+        private const int MinimumPreviewLayer = 6;
         private const int ItemTypeSword = 1;
         private const int ItemTypeGun = 2;
         private const int ItemTypeDoll = 3;
@@ -19,10 +19,14 @@ namespace POTCO.ItemCards
         private const int ItemSubtypeMusket = 8;
         private const int ItemSubtypeBlunderbuss = 9;
         private const int ItemSubtypeBayonet = 10;
+        private static readonly Rect PreviewTextureTexCoords = new Rect(1f, 0f, -1f, 1f);
         private static readonly Vector3 PreviewWorldOrigin = new Vector3(10000f, 10000f, 10000f);
+        private static readonly bool[] ClaimedPreviewLayers = new bool[PreviewLayer - MinimumPreviewLayer + 1];
 
         private readonly Dictionary<string, GameObject> modelCache = new Dictionary<string, GameObject>(StringComparer.Ordinal);
         private readonly PotcoGenericPlayerPreviewFactory genericPlayerFactory = new PotcoGenericPlayerPreviewFactory();
+        private readonly int previewLayer;
+        private readonly int previewLayerMask;
 
         private Camera previewCamera;
         private Light keyLight;
@@ -38,6 +42,13 @@ namespace POTCO.ItemCards
         private bool hasModelBounds;
         private Vector2 modelCenterBias;
         private float modelOrthoScale = 1f;
+        private bool previewLayerClaimed;
+
+        public PotcoRuntimeItemCardPreviewRenderer()
+        {
+            previewLayer = ClaimPreviewLayer(out previewLayerClaimed);
+            previewLayerMask = 1 << previewLayer;
+        }
 
         public bool DrawPreview(Rect rect, ItemCardData card, ItemDataRow row, PotcoSourceIndex index)
         {
@@ -78,16 +89,28 @@ namespace POTCO.ItemCards
 
             RenderTexture previous = RenderTexture.active;
             previewCamera.targetTexture = renderTexture;
+            RenderTexture.active = renderTexture;
+            ClearPreviewRenderTexture();
             previewCamera.Render();
             previewCamera.targetTexture = null;
             RenderTexture.active = previous;
 
+            DrawPreviewRenderTexture(rect);
+            return true;
+        }
+
+        private static void ClearPreviewRenderTexture()
+        {
+            GL.Clear(true, true, Color.clear);
+        }
+
+        private void DrawPreviewRenderTexture(Rect rect)
+        {
             Material material = PreviewCompositeMaterial;
             if (material != null)
-                Graphics.DrawTexture(rect, renderTexture, material);
+                Graphics.DrawTexture(rect, renderTexture, PreviewTextureTexCoords, 0, 0, 0, 0, Color.white, material);
             else
-                GUI.DrawTexture(rect, renderTexture, ScaleMode.StretchToFill, false);
-            return true;
+                GUI.DrawTextureWithTexCoords(rect, renderTexture, PreviewTextureTexCoords, false);
         }
 
         public void Dispose()
@@ -101,6 +124,7 @@ namespace POTCO.ItemCards
                 DestroyObject(keyLight.gameObject);
             if (fillLight != null)
                 DestroyObject(fillLight.gameObject);
+            ReleasePreviewLayer();
 
             renderTexture = null;
             previewCompositeMaterial = null;
@@ -163,7 +187,7 @@ namespace POTCO.ItemCards
 
             GameObject cameraObject = new GameObject("POTCO Runtime Item Card Preview Camera");
             cameraObject.hideFlags = HideFlags.HideAndDontSave;
-            cameraObject.layer = PreviewLayer;
+            cameraObject.layer = previewLayer;
             previewCamera = cameraObject.AddComponent<Camera>();
             previewCamera.enabled = false;
             previewCamera.clearFlags = CameraClearFlags.SolidColor;
@@ -171,26 +195,26 @@ namespace POTCO.ItemCards
             previewCamera.orthographic = true;
             previewCamera.nearClipPlane = 0.01f;
             previewCamera.farClipPlane = 1000f;
-            previewCamera.cullingMask = PreviewLayerMask;
+            previewCamera.cullingMask = previewLayerMask;
 
             GameObject keyObject = new GameObject("POTCO Runtime Item Card Preview Key Light");
             keyObject.hideFlags = HideFlags.HideAndDontSave;
-            keyObject.layer = PreviewLayer;
+            keyObject.layer = previewLayer;
             keyLight = keyObject.AddComponent<Light>();
             keyLight.type = LightType.Directional;
             keyLight.color = Color.white;
             keyLight.intensity = 1.25f;
-            keyLight.cullingMask = PreviewLayerMask;
+            keyLight.cullingMask = previewLayerMask;
             keyLight.transform.rotation = Quaternion.Euler(38f, 35f, 0f);
 
             GameObject fillObject = new GameObject("POTCO Runtime Item Card Preview Fill Light");
             fillObject.hideFlags = HideFlags.HideAndDontSave;
-            fillObject.layer = PreviewLayer;
+            fillObject.layer = previewLayer;
             fillLight = fillObject.AddComponent<Light>();
             fillLight.type = LightType.Directional;
             fillLight.color = new Color(0.68f, 0.68f, 0.68f, 1f);
             fillLight.intensity = 0.75f;
-            fillLight.cullingMask = PreviewLayerMask;
+            fillLight.cullingMask = previewLayerMask;
         }
 
         private bool EnsureModelInstance(GameObject source)
@@ -202,14 +226,14 @@ namespace POTCO.ItemCards
             modelRoot = new GameObject("POTCO Runtime Item Card Preview Model");
             modelRoot.hideFlags = HideFlags.HideAndDontSave;
             modelRoot.transform.position = PreviewWorldOrigin;
-            modelRoot.layer = PreviewLayer;
+            modelRoot.layer = previewLayer;
 
             modelInstance = Object.Instantiate(source, modelRoot.transform);
             modelInstance.hideFlags = HideFlags.HideAndDontSave;
             modelSource = source;
             modelInstanceIsGenericPlayer = false;
             genericPlayerItemId = -1;
-            SetLayerRecursively(modelRoot, PreviewLayer);
+            SetLayerRecursively(modelRoot, previewLayer);
             return TryGetRendererBounds(modelInstance, out modelBounds);
         }
 
@@ -223,7 +247,7 @@ namespace POTCO.ItemCards
             modelRoot = new GameObject("POTCO Runtime Item Card Preview Model");
             modelRoot.hideFlags = HideFlags.HideAndDontSave;
             modelRoot.transform.position = PreviewWorldOrigin;
-            modelRoot.layer = PreviewLayer;
+            modelRoot.layer = previewLayer;
 
             modelInstance = genericPlayerFactory.CreateEquippedGenericPlayer(card, row, index);
             if (modelInstance == null)
@@ -233,7 +257,7 @@ namespace POTCO.ItemCards
             modelSource = source;
             modelInstanceIsGenericPlayer = true;
             genericPlayerItemId = itemId;
-            SetLayerRecursively(modelRoot, PreviewLayer);
+            SetLayerRecursively(modelRoot, previewLayer);
             return TryGetRendererBounds(modelInstance, out modelBounds);
         }
 
@@ -422,10 +446,56 @@ namespace POTCO.ItemCards
             if (target == null)
                 return;
 
+            if (target is GameObject gameObject)
+                DeactivatePreviewObject(gameObject);
+
             if (Application.isPlaying)
                 Object.Destroy(target);
             else
                 Object.DestroyImmediate(target);
+        }
+
+        private static void DeactivatePreviewObject(GameObject target)
+        {
+            if (target == null)
+                return;
+
+            target.SetActive(false);
+        }
+
+        private static int ClaimPreviewLayer(out bool claimed)
+        {
+            lock (ClaimedPreviewLayers)
+            {
+                for (int layer = PreviewLayer; layer >= MinimumPreviewLayer; layer--)
+                {
+                    int index = layer - MinimumPreviewLayer;
+                    if (ClaimedPreviewLayers[index])
+                        continue;
+
+                    ClaimedPreviewLayers[index] = true;
+                    claimed = true;
+                    return layer;
+                }
+            }
+
+            claimed = false;
+            return PreviewLayer;
+        }
+
+        private void ReleasePreviewLayer()
+        {
+            if (!previewLayerClaimed)
+                return;
+
+            lock (ClaimedPreviewLayers)
+            {
+                int index = previewLayer - MinimumPreviewLayer;
+                if (index >= 0 && index < ClaimedPreviewLayers.Length)
+                    ClaimedPreviewLayers[index] = false;
+            }
+
+            previewLayerClaimed = false;
         }
 
         private Material PreviewCompositeMaterial

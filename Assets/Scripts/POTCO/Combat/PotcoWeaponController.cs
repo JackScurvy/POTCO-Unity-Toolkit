@@ -33,7 +33,15 @@ namespace POTCO.Combat
         private const float GunMediumRangeMultiplier = 1f;
         private const float GunLongRangeMultiplier = 1.5f;
         private const float GunDeadzoneRange = 15f;
-        private const float WeaponSwitchPutAwaySeconds = 0.25f;
+        private const float SwordPutAwayDetachSeconds = 0.56f;
+        private const float GunPutAwayDetachSeconds = 0.60f;
+        private const float GrenadePutAwayDetachSeconds = 0.468f;
+        private const float PowderKegPutAwayDetachSeconds = 0.50f;
+        private const float ReferenceAnimationFrameRate = 24f;
+        private const float SwordPutAwayAnimationSeconds = 35f / ReferenceAnimationFrameRate / 2f;
+        private const float GunPutAwayAnimationSeconds = 37f / ReferenceAnimationFrameRate / 2f;
+        private const float GrenadePutAwayAnimationSeconds = 19f / ReferenceAnimationFrameRate / 1.5f;
+        private const float PowderKegPutAwayAnimationSeconds = 27f / ReferenceAnimationFrameRate / 1.5f;
         private const float ReferenceClickAttackRecoverySeconds = 0.75f;
         private readonly Dictionary<int, float> nextSkillUseTime = new Dictionary<int, float>();
         private readonly List<string> messages = new List<string>();
@@ -214,7 +222,14 @@ namespace POTCO.Combat
             IsWeaponDrawn = true;
 
             ApplyAnimationOverride(currentWeapon);
-            PlayWeaponAnimation(currentWeapon.DrawAnimation, WrapMode.Once, 0.08f, 0.35f);
+            PlayWeaponAnimation(
+                currentWeapon.DrawAnimation,
+                WrapMode.Once,
+                0.08f,
+                0.35f,
+                0f,
+                ShouldPreferInMotionWeaponTransitionAnimation(currentWeapon.DrawAnimation),
+                true);
             AddMessage($"Drew {currentWeapon.DisplayName}.");
             return PotcoWeaponUseResult.Ok("Weapon drawn.");
         }
@@ -227,12 +242,25 @@ namespace POTCO.Combat
             if (!IsWeaponDrawn)
                 return PotcoWeaponUseResult.Ok("Weapon already put away.");
 
-            PlayPutAwayAnimation(currentWeapon);
+            PotcoWeaponDefinition weaponToPutAway = currentWeapon;
+            float detachDelaySeconds = ResolvePutAwayDetachDelaySeconds(weaponToPutAway);
+            float animationSeconds = ResolvePutAwayAnimationLockSeconds(weaponToPutAway);
+            PlayPutAwayAnimation(weaponToPutAway);
 
-            DestroyAttachedWeapon();
             IsWeaponDrawn = false;
-            if (animationPlayer != null)
-                animationPlayer.ClearWeaponAnimationOverride();
+            if (ShouldDeferPutAwayCleanup(Application.isPlaying, isActiveAndEnabled, detachDelaySeconds, animationSeconds))
+            {
+                if (weaponSwitchCoroutine != null)
+                    StopCoroutine(weaponSwitchCoroutine);
+
+                isSwitchingWeapon = true;
+                weaponSwitchCoroutine = StartCoroutine(FinishPuttingAwayCurrentWeapon(detachDelaySeconds, animationSeconds));
+            }
+            else
+            {
+                CompletePutAwayCleanup();
+            }
+
             AddMessage("Weapon put away.");
             return PotcoWeaponUseResult.Ok("Weapon put away.");
         }
@@ -1084,9 +1112,17 @@ namespace POTCO.Combat
             if (previousWeapon != null)
                 AddMessage($"Putting away {previousWeapon.DisplayName}.");
 
-            yield return new WaitForSeconds(WeaponSwitchPutAwaySeconds);
+            float detachDelaySeconds = ResolvePutAwayDetachDelaySeconds(previousWeapon);
+            float animationSeconds = ResolvePutAwayAnimationLockSeconds(previousWeapon);
+            if (detachDelaySeconds > 0f)
+                yield return new WaitForSeconds(detachDelaySeconds);
 
             DestroyAttachedWeapon();
+            float remainingAnimationSeconds = Mathf.Max(0f, animationSeconds - Mathf.Max(0f, detachDelaySeconds));
+            if (remainingAnimationSeconds > 0f)
+                yield return new WaitForSeconds(remainingAnimationSeconds);
+
+            ClearWeaponAnimationOverride();
             SetCurrentWeaponSelection(slotNumber, definition);
             PotcoWeaponUseResult drawResult = DrawCurrentWeapon();
             if (!drawResult.Success)
@@ -1096,12 +1132,47 @@ namespace POTCO.Combat
             weaponSwitchCoroutine = null;
         }
 
+        private IEnumerator FinishPuttingAwayCurrentWeapon(float detachDelaySeconds, float animationSeconds)
+        {
+            if (detachDelaySeconds > 0f)
+                yield return new WaitForSeconds(detachDelaySeconds);
+
+            DestroyAttachedWeapon();
+            float remainingAnimationSeconds = Mathf.Max(0f, animationSeconds - Mathf.Max(0f, detachDelaySeconds));
+            if (remainingAnimationSeconds > 0f)
+                yield return new WaitForSeconds(remainingAnimationSeconds);
+
+            ClearWeaponAnimationOverride();
+            isSwitchingWeapon = false;
+            weaponSwitchCoroutine = null;
+        }
+
+        private void CompletePutAwayCleanup()
+        {
+            DestroyAttachedWeapon();
+            ClearWeaponAnimationOverride();
+        }
+
+        private void ClearWeaponAnimationOverride()
+        {
+            if (animationPlayer != null)
+                animationPlayer.ClearWeaponAnimationOverride();
+        }
+
         private void PlayPutAwayAnimation(PotcoWeaponDefinition definition)
         {
             if (definition == null)
                 return;
 
-            PlayWeaponAnimation(definition.PutAwayAnimation, WrapMode.Once, 0.08f, WeaponSwitchPutAwaySeconds);
+            float animationSeconds = ResolvePutAwayAnimationLockSeconds(definition);
+            PlayWeaponAnimation(
+                definition.PutAwayAnimation,
+                WrapMode.Once,
+                0.08f,
+                animationSeconds,
+                animationSeconds,
+                ShouldPreferInMotionWeaponTransitionAnimation(definition.PutAwayAnimation),
+                true);
         }
 
         private static void ApplyAttachmentPose(GameObject weaponObject, PotcoWeaponAttachmentPose pose)
@@ -1138,9 +1209,72 @@ namespace POTCO.Combat
             return !string.IsNullOrWhiteSpace(animationName);
         }
 
+        public static bool ShouldPreferInMotionWeaponTransitionAnimation(string animationName)
+        {
+            return !string.IsNullOrWhiteSpace(animationName);
+        }
+
         public static bool ShouldRestartClickComboAnimation(string previousAnimationName, string nextAnimationName, bool continueClickComboClip)
         {
             return !continueClickComboClip || !string.Equals(previousAnimationName, nextAnimationName, StringComparison.Ordinal);
+        }
+
+        public static bool ShouldDeferPutAwayCleanup(bool applicationIsPlaying, bool isActiveAndEnabled, float detachDelaySeconds)
+        {
+            return ShouldDeferPutAwayCleanup(applicationIsPlaying, isActiveAndEnabled, detachDelaySeconds, detachDelaySeconds);
+        }
+
+        public static bool ShouldDeferPutAwayCleanup(bool applicationIsPlaying, bool isActiveAndEnabled, float detachDelaySeconds, float animationSeconds)
+        {
+            return applicationIsPlaying && isActiveAndEnabled && Mathf.Max(detachDelaySeconds, animationSeconds) > 0f;
+        }
+
+        public static float ResolvePutAwayDetachDelaySeconds(PotcoWeaponDefinition definition)
+        {
+            return definition != null ? ResolvePutAwayDetachDelaySeconds(definition.Class) : 0f;
+        }
+
+        public static float ResolvePutAwayAnimationLockSeconds(PotcoWeaponDefinition definition)
+        {
+            return definition != null ? ResolvePutAwayAnimationLockSeconds(definition.Class) : 0f;
+        }
+
+        public static float ResolvePutAwayAnimationLockSeconds(PotcoWeaponClass weaponClass)
+        {
+            switch (weaponClass)
+            {
+                case PotcoWeaponClass.Pistol:
+                case PotcoWeaponClass.Gun:
+                case PotcoWeaponClass.Bayonet:
+                    return GunPutAwayAnimationSeconds;
+                case PotcoWeaponClass.Grenade:
+                    return GrenadePutAwayAnimationSeconds;
+                case PotcoWeaponClass.PowderKeg:
+                    return PowderKegPutAwayAnimationSeconds;
+                case PotcoWeaponClass.MonsterMelee:
+                    return 0f;
+                default:
+                    return SwordPutAwayAnimationSeconds;
+            }
+        }
+
+        public static float ResolvePutAwayDetachDelaySeconds(PotcoWeaponClass weaponClass)
+        {
+            switch (weaponClass)
+            {
+                case PotcoWeaponClass.Pistol:
+                case PotcoWeaponClass.Gun:
+                case PotcoWeaponClass.Bayonet:
+                    return GunPutAwayDetachSeconds;
+                case PotcoWeaponClass.Grenade:
+                    return GrenadePutAwayDetachSeconds;
+                case PotcoWeaponClass.PowderKeg:
+                    return PowderKegPutAwayDetachSeconds;
+                case PotcoWeaponClass.MonsterMelee:
+                    return 0f;
+                default:
+                    return SwordPutAwayDetachSeconds;
+            }
         }
 
         private void PlayWeaponAnimation(string animationName, WrapMode wrapMode, float transition, float lockSeconds)
