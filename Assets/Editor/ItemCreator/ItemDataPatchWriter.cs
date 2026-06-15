@@ -1,5 +1,6 @@
 using System;
 using System.Text.RegularExpressions;
+using POTCO.ItemCards;
 
 namespace POTCO.Editor.ItemCreator
 {

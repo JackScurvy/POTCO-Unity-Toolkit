@@ -1,86 +1,40 @@
-#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using CharacterOG.Data;
 using CharacterOG.Data.PureCSharpBackend;
 using CharacterOG.Models;
 using CharacterOG.Runtime.Systems;
-using POTCO.ItemCards;
-using UnityEditor;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
-namespace POTCO.Editor.ItemCreator
+namespace POTCO.ItemCards
 {
-    public sealed class ItemPreviewData
-    {
-        public Texture2D Icon { get; set; }
-        public GameObject ModelPrefab { get; set; }
-        public string Status { get; set; } = string.Empty;
-        public bool UsesGenericPlayer { get; set; }
-    }
-
-    public sealed class ItemPreviewResolver
+    public sealed class PotcoGenericPlayerPreviewFactory
     {
         private const string MaleModelPath = "phase_2/models/char/mp_2000";
         private const string FemaleModelPath = "phase_2/models/char/fp_2000";
 
-        private readonly Dictionary<string, Texture2D> iconCache = new Dictionary<string, Texture2D>(StringComparer.Ordinal);
-        private readonly Dictionary<string, GameObject> modelCache = new Dictionary<string, GameObject>(StringComparer.Ordinal);
-        private readonly PotcoGenericPlayerPreviewFactory genericPlayerFactory = new PotcoGenericPlayerPreviewFactory();
-
         private IOgDataSource dataSource;
 
-        public ItemPreviewData Resolve(ItemCardData card)
+        public GameObject ResolveGenericPlayerPrefab()
         {
-            var preview = new ItemPreviewData();
-            if (card == null)
-                return preview;
-
-            preview.Icon = ResolveIcon(card.IconName);
-
-            if (card.PreviewMode == ItemPreviewMode.GenericPlayer)
-            {
-                preview.UsesGenericPlayer = true;
-                preview.ModelPrefab = genericPlayerFactory.ResolveGenericPlayerPrefab();
-                preview.Status = preview.ModelPrefab == null
-                    ? "Generic player model not imported."
-                    : "Generic player preview";
-                return preview;
-            }
-
-            if (card.PreviewMode == ItemPreviewMode.Model)
-                preview.ModelPrefab = ResolveModelPrefab(card.ModelName);
-
-            if (preview.ModelPrefab == null && preview.Icon == null)
-                preview.Status = "Missing preview asset.";
-
-            return preview;
+            return Resources.Load<GameObject>(MaleModelPath) ??
+                   Resources.Load<GameObject>("Groups/Pirate Dummy") ??
+                   Resources.Load<GameObject>("Pirate Dummy");
         }
 
-        public GameObject CreatePreviewObject(ItemCardData card, ItemDataRow row, PotcoSourceIndex index)
+        public GameObject CreateEquippedGenericPlayer(ItemCardData card, ItemDataRow row, PotcoSourceIndex index)
         {
-            if (card == null)
-                return null;
-
-            if (card.PreviewMode == ItemPreviewMode.GenericPlayer)
-                return genericPlayerFactory.CreateEquippedGenericPlayer(card, row, index);
-
-            GameObject prefab = Resolve(card).ModelPrefab;
-            return prefab == null ? null : Object.Instantiate(prefab);
-        }
-
-        private GameObject CreateEquippedGenericPlayer(ItemCardData card, ItemDataRow row, PotcoSourceIndex index)
-        {
-            GameObject prefab = Resources.Load<GameObject>(MaleModelPath);
-            if (prefab == null)
-                prefab = ResolveModelPrefab("Pirate Dummy");
+            GameObject prefab = ResolveGenericPlayerPrefab();
             if (prefab == null)
                 return null;
 
             GameObject character = Object.Instantiate(prefab);
-            character.name = $"ItemPreview_{card.ItemId}_{card.Title}";
+            character.name = card == null ? "ItemPreview_GenericPlayer" : $"ItemPreview_{card.ItemId}_{card.Title}";
             character.hideFlags = HideFlags.HideAndDontSave;
+
+            if (card == null || row == null || index == null)
+                return character;
 
             try
             {
@@ -201,96 +155,6 @@ namespace POTCO.Editor.ItemCreator
                 dataSource = new PureCSharpDataSource();
         }
 
-        private Texture2D ResolveIcon(string iconName)
-        {
-            if (string.IsNullOrEmpty(iconName))
-                return null;
-
-            if (iconCache.TryGetValue(iconName, out Texture2D cached))
-                return cached;
-
-            string[] paths =
-            {
-                $"Assets/Resources/phase_2/maps/{iconName}.png",
-                $"Assets/Resources/phase_2/maps/{iconName}.jpg",
-                $"Assets/Resources/phase_2/maps/{iconName}.jpeg",
-                $"Assets/Resources/phase_2/maps/{iconName}.tga",
-                $"Assets/Resources/phase_2/maps/{iconName}.rgb"
-            };
-
-            foreach (string path in paths)
-            {
-                Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-                if (texture != null)
-                {
-                    iconCache[iconName] = texture;
-                    return texture;
-                }
-            }
-
-            string[] guids = AssetDatabase.FindAssets($"{iconName} t:Texture2D", new[] { "Assets/Resources" });
-            foreach (string guid in guids)
-            {
-                Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(AssetDatabase.GUIDToAssetPath(guid));
-                if (texture != null)
-                {
-                    iconCache[iconName] = texture;
-                    return texture;
-                }
-            }
-
-            iconCache[iconName] = null;
-            return null;
-        }
-
-        private GameObject ResolveModelPrefab(string modelName)
-        {
-            if (string.IsNullOrEmpty(modelName))
-                return null;
-
-            if (modelCache.TryGetValue(modelName, out GameObject cached))
-                return cached;
-
-            string normalized = modelName.Replace("\\", "/");
-            string[] resourcePaths =
-            {
-                $"phase_3/models/handheld/{normalized}",
-                $"phase_2/models/handheld/{normalized}",
-                $"phase_2/models/inventory/{normalized}",
-                $"phase_2/models/char/{normalized}"
-            };
-
-            foreach (string path in resourcePaths)
-            {
-                GameObject loaded = Resources.Load<GameObject>(path);
-                if (loaded != null)
-                {
-                    modelCache[modelName] = loaded;
-                    return loaded;
-                }
-            }
-
-            string[] guids = AssetDatabase.FindAssets($"{PathSafeSearchName(modelName)} t:GameObject", new[] { "Assets/Resources" });
-            foreach (string guid in guids)
-            {
-                GameObject loaded = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(guid));
-                if (loaded != null)
-                {
-                    modelCache[modelName] = loaded;
-                    return loaded;
-                }
-            }
-
-            modelCache[modelName] = null;
-            return null;
-        }
-
-        private static string PathSafeSearchName(string modelName)
-        {
-            int slash = modelName.LastIndexOf('/');
-            return slash >= 0 ? modelName.Substring(slash + 1) : modelName;
-        }
-
         private static Transform FindChild(Transform root, params string[] names)
         {
             Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
@@ -300,6 +164,7 @@ namespace POTCO.Editor.ItemCreator
                     if (transform.name == name)
                         return transform;
             }
+
             return null;
         }
 
@@ -316,4 +181,3 @@ namespace POTCO.Editor.ItemCreator
         };
     }
 }
-#endif

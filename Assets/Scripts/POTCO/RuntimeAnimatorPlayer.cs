@@ -12,16 +12,26 @@ namespace POTCO
     [RequireComponent(typeof(Animator))]
     public class RuntimeAnimatorPlayer : MonoBehaviour
     {
+        private const string PotcoLegsRootName = "dx_root";
+        private const string PotcoTorsoRootName = "zz_spine01";
+        private const string PotcoHeadRootName = "zz_head01";
+
         private Animator animator;
         private PlayableGraph playableGraph;
         private AnimationMixerPlayable mixer;
+        private AnimationLayerMixerPlayable layerMixer;
+        private AnimationMixerPlayable upperBodyMixer;
 
         // Track all clips and their playable indices
+        private Dictionary<string, AnimationClip> clipAssets = new Dictionary<string, AnimationClip>();
         private Dictionary<string, AnimationClipPlayable> clipPlayables = new Dictionary<string, AnimationClipPlayable>();
         private Dictionary<string, int> clipIndices = new Dictionary<string, int>();
+        private Dictionary<string, AnimationClipPlayable> upperBodyClipPlayables = new Dictionary<string, AnimationClipPlayable>();
+        private Dictionary<string, int> upperBodyClipIndices = new Dictionary<string, int>();
         private Dictionary<string, WrapMode> clipWrapModes = new Dictionary<string, WrapMode>();
         private readonly List<Transform> excludedTransforms = new List<Transform>();
         private AvatarMask transformMask;
+        private AvatarMask upperBodyAttackMask;
 
         // Track current animation and crossfade state
         private string currentClipName = "";
@@ -33,6 +43,9 @@ namespace POTCO
 
         // Crossfade tracking
         private Coroutine crossfadeCoroutine = null;
+        private Coroutine upperBodyFadeCoroutine = null;
+        private string upperBodyCurrentClipName = "";
+        private int upperBodyCurrentClipIndex = -1;
 
         private void Awake()
         {
@@ -59,14 +72,22 @@ namespace POTCO
             playableGraph = PlayableGraph.Create($"{gameObject.name}_AnimGraph");
             playableGraph.SetTimeUpdateMode(DirectorUpdateMode.GameTime);
 
-            // Create a clip mixer with initial capacity (will grow as clips are added).
-            // Layer mixers are for stacked animation layers; ordinary clip transitions need
-            // a normalized clip mixer or interrupted blends can flash bind pose.
+            // Create a base locomotion mixer plus a masked combat overlay layer.
+            // Ordinary movement transitions stay on the base mixer; weapon attacks can
+            // layer over the upper body without stealing weight from hips/legs/feet.
             mixer = AnimationMixerPlayable.Create(playableGraph, 0);
+            upperBodyMixer = AnimationMixerPlayable.Create(playableGraph, 0);
+            layerMixer = AnimationLayerMixerPlayable.Create(playableGraph, 2);
+            playableGraph.Connect(mixer, 0, layerMixer, 0);
+            playableGraph.Connect(upperBodyMixer, 0, layerMixer, 1);
+            layerMixer.SetInputWeight(0, 1f);
+            layerMixer.SetInputWeight(1, 0f);
+            upperBodyAttackMask = BuildUpperBodyAttackMask();
+            layerMixer.SetLayerMaskFromAvatarMask((uint)1, upperBodyAttackMask);
 
             // Connect mixer to Animator
             var output = AnimationPlayableOutput.Create(playableGraph, "Animation", animator);
-            output.SetSourcePlayable(mixer);
+            output.SetSourcePlayable(layerMixer);
 
             // Start playing the graph
             playableGraph.Play();
@@ -128,6 +149,7 @@ namespace POTCO
             ApplyTransformMaskToInput(inputIndex);
 
             // Store references
+            clipAssets[name] = clip;
             clipPlayables[name] = clipPlayable;
             clipIndices[name] = inputIndex;
 
@@ -163,6 +185,24 @@ namespace POTCO
                         Debug.LogWarning($"⚠️ PingPong wrap mode not fully supported in Playables API for '{clipName}'");
                         break;
                 }
+            }
+        }
+
+        private static void ApplyWrapModeToPlayable(AnimationClipPlayable playable, WrapMode wrapMode, string clipName)
+        {
+            switch (wrapMode)
+            {
+                case WrapMode.Loop:
+                    playable.SetDuration(double.PositiveInfinity);
+                    break;
+                case WrapMode.Once:
+                case WrapMode.ClampForever:
+                    playable.SetDuration(playable.GetAnimationClip().length);
+                    break;
+                case WrapMode.PingPong:
+                    playable.SetDuration(double.PositiveInfinity);
+                    Debug.LogWarning($"PingPong wrap mode not fully supported in Playables API for '{clipName}'");
+                    break;
             }
         }
 
@@ -252,6 +292,16 @@ namespace POTCO
         /// </summary>
         public void CrossFade(string clipName, float duration)
         {
+            CrossFade(clipName, duration, false);
+        }
+
+        public void CrossFade(string clipName, float duration, bool restartIfAlreadyPlaying)
+        {
+            CrossFade(clipName, duration, restartIfAlreadyPlaying, 1f);
+        }
+
+        public void CrossFade(string clipName, float duration, bool restartIfAlreadyPlaying, float requestedTargetWeight)
+        {
             if (!isInitialized)
             {
                 Debug.LogError($"❌ RuntimeAnimatorPlayer not initialized on {gameObject.name}");
@@ -264,11 +314,13 @@ namespace POTCO
                 return;
             }
 
+            requestedTargetWeight = Mathf.Clamp01(requestedTargetWeight);
+
             // IMPORTANT: Don't crossfade if this clip is already the dominant animation
             // Check if target clip already has weight > 0.9 (basically fully playing)
             int targetIndex = clipIndices[clipName];
             float targetWeight = mixer.GetInputWeight(targetIndex);
-            if (targetWeight > 0.9f)
+            if (ShouldSkipCurrentCrossFade(currentClipName, clipName, targetWeight, requestedTargetWeight, restartIfAlreadyPlaying))
             {
                 // Already playing this animation. Do not restart/rebind, or transitions can flash bind pose.
                 currentClipName = clipName;
@@ -279,7 +331,10 @@ namespace POTCO
             // If duration is 0 or very small, just play immediately
             if (duration < 0.01f)
             {
-                Play(clipName);
+                if (requestedTargetWeight >= 0.999f)
+                    Play(clipName);
+                else
+                    crossfadeCoroutine = StartCoroutine(CrossFadeCoroutine(clipName, 0.01f, requestedTargetWeight));
                 return;
             }
 
@@ -290,11 +345,225 @@ namespace POTCO
             }
 
             // Start new crossfade
-            crossfadeCoroutine = StartCoroutine(CrossFadeCoroutine(clipName, duration));
+            crossfadeCoroutine = StartCoroutine(CrossFadeCoroutine(clipName, duration, requestedTargetWeight));
+        }
+
+        public static bool ShouldSkipDominantCrossFade(float targetWeight, bool restartIfAlreadyPlaying)
+        {
+            return targetWeight > 0.9f && !restartIfAlreadyPlaying;
+        }
+
+        public static bool ShouldSkipCurrentCrossFade(string currentClipName, string nextClipName, float currentWeight, float requestedTargetWeight, bool restartIfAlreadyPlaying)
+        {
+            if (restartIfAlreadyPlaying)
+                return false;
+
+            if (string.Equals(currentClipName, nextClipName, System.StringComparison.Ordinal))
+                return true;
+
+            return currentWeight >= Mathf.Min(0.9f, requestedTargetWeight - 0.001f);
+        }
+
+        public void CrossFadeUpperBody(string clipName, float duration, bool restartIfAlreadyPlaying)
+        {
+            if (!isInitialized)
+            {
+                Debug.LogError($"âŒ RuntimeAnimatorPlayer not initialized on {gameObject.name}");
+                return;
+            }
+
+            if (!EnsureUpperBodyClip(clipName))
+            {
+                Debug.LogError($"âŒ Clip '{clipName}' not found in RuntimeAnimatorPlayer on {gameObject.name}");
+                return;
+            }
+
+            bool restartClipTime = restartIfAlreadyPlaying ||
+                                   !string.Equals(upperBodyCurrentClipName, clipName, System.StringComparison.Ordinal);
+            int targetIndex = upperBodyClipIndices[clipName];
+            float targetWeight = upperBodyMixer.GetInputWeight(targetIndex);
+            float layerWeight = layerMixer.GetInputWeight(1);
+            if (!restartClipTime && targetWeight > 0.9f && layerWeight > 0.9f)
+            {
+                upperBodyCurrentClipName = clipName;
+                upperBodyCurrentClipIndex = targetIndex;
+                return;
+            }
+
+            if (upperBodyFadeCoroutine != null)
+            {
+                StopCoroutine(upperBodyFadeCoroutine);
+            }
+
+            upperBodyFadeCoroutine = StartCoroutine(UpperBodyCrossFadeCoroutine(
+                clipName,
+                Mathf.Max(0.01f, duration),
+                restartClipTime));
+        }
+
+        public void StopUpperBodyOverlay(float duration)
+        {
+            if (!isInitialized || !layerMixer.IsValid())
+            {
+                return;
+            }
+
+            if (upperBodyFadeCoroutine != null)
+            {
+                StopCoroutine(upperBodyFadeCoroutine);
+            }
+
+            if (duration < 0.01f)
+            {
+                ClearUpperBodyOverlayWeights();
+                EvaluateGraphPose();
+                return;
+            }
+
+            upperBodyFadeCoroutine = StartCoroutine(FadeUpperBodyOverlayOutCoroutine(duration));
+        }
+
+        private bool EnsureUpperBodyClip(string clipName)
+        {
+            if (upperBodyClipPlayables.ContainsKey(clipName))
+            {
+                return true;
+            }
+
+            if (!clipAssets.TryGetValue(clipName, out AnimationClip clip))
+            {
+                if (!clipPlayables.TryGetValue(clipName, out AnimationClipPlayable basePlayable))
+                {
+                    return false;
+                }
+
+                clip = basePlayable.GetAnimationClip();
+            }
+
+            if (clip == null)
+            {
+                return false;
+            }
+
+            var clipPlayable = AnimationClipPlayable.Create(playableGraph, clip);
+            if (clipWrapModes.TryGetValue(clipName, out WrapMode wrapMode))
+            {
+                ApplyWrapModeToPlayable(clipPlayable, wrapMode, clipName);
+            }
+
+            int inputIndex = upperBodyMixer.GetInputCount();
+            upperBodyMixer.AddInput(clipPlayable, 0, 0f);
+            upperBodyClipPlayables[clipName] = clipPlayable;
+            upperBodyClipIndices[clipName] = inputIndex;
+            return true;
+        }
+
+        private System.Collections.IEnumerator UpperBodyCrossFadeCoroutine(string toClipName, float duration, bool restartClipTime)
+        {
+            int toIndex = upperBodyClipIndices[toClipName];
+
+            int fromIndex = -1;
+            float fromWeight = 0f;
+            for (int i = 0; i < upperBodyMixer.GetInputCount(); i++)
+            {
+                if (i == toIndex)
+                    continue;
+
+                float weight = upperBodyMixer.GetInputWeight(i);
+                if (weight > fromWeight)
+                {
+                    fromWeight = weight;
+                    fromIndex = i;
+                }
+            }
+
+            float startLayerWeight = layerMixer.GetInputWeight(1);
+            float startFromWeight = fromIndex >= 0 ? upperBodyMixer.GetInputWeight(fromIndex) : 0f;
+            float startToWeight = upperBodyMixer.GetInputWeight(toIndex);
+
+            for (int i = 0; i < upperBodyMixer.GetInputCount(); i++)
+            {
+                if (i != fromIndex && i != toIndex)
+                {
+                    upperBodyMixer.SetInputWeight(i, 0f);
+                }
+            }
+
+            var toPlayable = upperBodyClipPlayables[toClipName];
+            if (restartClipTime)
+            {
+                toPlayable.SetTime(0);
+            }
+
+            toPlayable.Play();
+            upperBodyCurrentClipName = toClipName;
+            upperBodyCurrentClipIndex = toIndex;
+            EvaluateGraphPose();
+
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                float t = elapsed / duration;
+                layerMixer.SetInputWeight(1, Mathf.Lerp(startLayerWeight, 1f, t));
+                if (fromIndex >= 0)
+                {
+                    upperBodyMixer.SetInputWeight(fromIndex, Mathf.Lerp(startFromWeight, 0f, t));
+                }
+
+                upperBodyMixer.SetInputWeight(toIndex, Mathf.Lerp(startToWeight, 1f, t));
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+
+            layerMixer.SetInputWeight(0, 1f);
+            layerMixer.SetInputWeight(1, 1f);
+            for (int i = 0; i < upperBodyMixer.GetInputCount(); i++)
+            {
+                upperBodyMixer.SetInputWeight(i, i == toIndex ? 1f : 0f);
+            }
+
+            upperBodyFadeCoroutine = null;
+            EvaluateGraphPose();
+        }
+
+        private System.Collections.IEnumerator FadeUpperBodyOverlayOutCoroutine(float duration)
+        {
+            float startLayerWeight = layerMixer.GetInputWeight(1);
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                float t = elapsed / duration;
+                layerMixer.SetInputWeight(1, Mathf.Lerp(startLayerWeight, 0f, t));
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+
+            ClearUpperBodyOverlayWeights();
+            upperBodyFadeCoroutine = null;
+            EvaluateGraphPose();
+        }
+
+        private void ClearUpperBodyOverlayWeights()
+        {
+            layerMixer.SetInputWeight(0, 1f);
+            layerMixer.SetInputWeight(1, 0f);
+            for (int i = 0; i < upperBodyMixer.GetInputCount(); i++)
+            {
+                upperBodyMixer.SetInputWeight(i, 0f);
+            }
+
+            upperBodyCurrentClipName = "";
+            upperBodyCurrentClipIndex = -1;
         }
 
         private System.Collections.IEnumerator CrossFadeCoroutine(string toClipName, float duration)
         {
+            return CrossFadeCoroutine(toClipName, duration, 1f);
+        }
+
+        private System.Collections.IEnumerator CrossFadeCoroutine(string toClipName, float duration, float finalToWeight)
+        {
+            finalToWeight = Mathf.Clamp01(finalToWeight);
             int toIndex = clipIndices[toClipName];
 
             RebindAnimatorIfNeeded();
@@ -405,6 +674,8 @@ namespace POTCO
             currentClipIndex = toIndex;
             EvaluateGraphPose();
 
+            float finalFromWeight = fromIndex >= 0 ? 1f - finalToWeight : 0f;
+
             // Crossfade weights from CURRENT weights (not assuming 1.0 and 0.0)
             // This fixes T-posing when rapidly switching animations
             float elapsed = 0f;
@@ -417,21 +688,26 @@ namespace POTCO
                 // To:   startToWeight   → 1.0
                 if (fromIndex >= 0)
                 {
-                    float targetFromWeight = Mathf.Lerp(startFromWeight, 0f, t);
+                    float targetFromWeight = Mathf.Lerp(startFromWeight, finalFromWeight, t);
                     mixer.SetInputWeight(fromIndex, targetFromWeight);
                 }
 
-                float targetToWeight = Mathf.Lerp(startToWeight, 1f, t);
+                float targetToWeight = Mathf.Lerp(startToWeight, finalToWeight, t);
                 mixer.SetInputWeight(toIndex, targetToWeight);
 
                 elapsed += Time.deltaTime;
                 yield return null;
             }
 
-            // Final weights: ONLY target clip at 1.0, all others at 0.0
+            // Final weights: ordinary base-layer crossfades normally land at full target weight.
             for (int i = 0; i < mixer.GetInputCount(); i++)
             {
-                mixer.SetInputWeight(i, i == toIndex ? 1f : 0f);
+                if (i == toIndex)
+                    mixer.SetInputWeight(i, finalToWeight);
+                else if (i == fromIndex)
+                    mixer.SetInputWeight(i, finalFromWeight);
+                else
+                    mixer.SetInputWeight(i, 0f);
             }
 
             currentClipName = toClipName;
@@ -493,6 +769,183 @@ namespace POTCO
             return clipPlayables[clipName].GetAnimationClip();
         }
 
+        private AvatarMask BuildUpperBodyAttackMask()
+        {
+            AvatarMask mask = new AvatarMask();
+            ConfigureUpperBodyHumanoidMask(mask);
+
+            Transform potcoTorsoRoot = FindUpperBodyAttackMaskRoot(transform);
+            if (potcoTorsoRoot != null)
+            {
+                mask.AddTransformPath(potcoTorsoRoot, true);
+                return mask;
+            }
+
+            mask.AddTransformPath(transform, true);
+            for (int i = 0; i < mask.transformCount; i++)
+            {
+                string maskPath = mask.GetTransformPath(i);
+                mask.SetTransformActive(i, ShouldIncludeInUpperBodyAttackMask(maskPath));
+            }
+
+            return mask;
+        }
+
+        public static Transform FindUpperBodyAttackMaskRoot(Transform animationRoot)
+        {
+            Transform torsoRoot = FindDescendantByName(animationRoot, PotcoTorsoRootName);
+            if (torsoRoot != null)
+            {
+                return torsoRoot;
+            }
+
+            return FindDescendantByName(animationRoot, PotcoHeadRootName);
+        }
+
+        private static Transform FindDescendantByName(Transform root, string targetName)
+        {
+            if (root == null || string.IsNullOrEmpty(targetName))
+            {
+                return null;
+            }
+
+            if (string.Equals(root.name, targetName, System.StringComparison.OrdinalIgnoreCase))
+            {
+                return root;
+            }
+
+            for (int i = 0; i < root.childCount; i++)
+            {
+                Transform match = FindDescendantByName(root.GetChild(i), targetName);
+                if (match != null)
+                {
+                    return match;
+                }
+            }
+
+            return null;
+        }
+
+        private static void ConfigureUpperBodyHumanoidMask(AvatarMask mask)
+        {
+            for (int i = 0; i < (int)AvatarMaskBodyPart.LastBodyPart; i++)
+            {
+                AvatarMaskBodyPart bodyPart = (AvatarMaskBodyPart)i;
+                mask.SetHumanoidBodyPartActive(bodyPart, ShouldIncludeHumanoidBodyPartInUpperBodyAttackMask(bodyPart));
+            }
+        }
+
+        public static bool ShouldIncludeHumanoidBodyPartInUpperBodyAttackMask(AvatarMaskBodyPart bodyPart)
+        {
+            switch (bodyPart)
+            {
+                case AvatarMaskBodyPart.Head:
+                case AvatarMaskBodyPart.LeftArm:
+                case AvatarMaskBodyPart.RightArm:
+                case AvatarMaskBodyPart.LeftFingers:
+                case AvatarMaskBodyPart.RightFingers:
+                case AvatarMaskBodyPart.LeftHandIK:
+                case AvatarMaskBodyPart.RightHandIK:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        public static bool ShouldIncludeInUpperBodyAttackMask(string maskPath)
+        {
+            if (string.IsNullOrWhiteSpace(maskPath))
+            {
+                return false;
+            }
+
+            string normalized = NormalizeMaskPath(maskPath);
+            if (PathHasSegment(normalized, PotcoTorsoRootName) || PathHasSegment(normalized, PotcoHeadRootName))
+            {
+                return true;
+            }
+
+            if (PathHasSegment(normalized, PotcoLegsRootName))
+            {
+                return false;
+            }
+
+            if (PathContainsAny(normalized,
+                    "spine",
+                    "chest",
+                    "torso",
+                    "neck",
+                    "head",
+                    "shoulder",
+                    "clavicle",
+                    "arm",
+                    "elbow",
+                    "wrist",
+                    "hand",
+                    "finger",
+                    "thumb",
+                    "weapon",
+                    "prop"))
+            {
+                return true;
+            }
+
+            if (PathContainsAny(normalized,
+                    "hip",
+                    "pelvis",
+                    "leg",
+                    "knee",
+                    "ankle",
+                    "foot",
+                    "toe",
+                    "thigh",
+                    "calf",
+                    "root"))
+            {
+                return false;
+            }
+
+            return false;
+        }
+
+        private static string NormalizeMaskPath(string maskPath)
+        {
+            return maskPath.Replace('\\', '/').ToLowerInvariant();
+        }
+
+        private static bool PathHasSegment(string normalizedPath, string segment)
+        {
+            if (string.IsNullOrEmpty(normalizedPath) || string.IsNullOrEmpty(segment))
+            {
+                return false;
+            }
+
+            string normalizedSegment = segment.ToLowerInvariant();
+            string[] pathSegments = normalizedPath.Split('/');
+            foreach (string pathSegment in pathSegments)
+            {
+                if (string.Equals(pathSegment, normalizedSegment, System.StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool PathContainsAny(string normalizedPath, params string[] terms)
+        {
+            foreach (string term in terms)
+            {
+                if (normalizedPath.Contains(term))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private void RebuildTransformMask()
         {
             transformMask = null;
@@ -550,7 +1003,7 @@ namespace POTCO
         private void ApplyTransformMaskToInput(int inputIndex)
         {
             // AnimationMixerPlayable gives stable clip blending for character locomotion.
-            // Transform masks require AnimationLayerMixerPlayable and are not used by current runtime callers.
+            // The weapon attack mask is applied on the dedicated upper-body layer.
         }
 
         private static string GetRelativePath(Transform root, Transform target)
@@ -585,8 +1038,16 @@ namespace POTCO
             playable.Destroy();
 
             // Remove from dictionaries
+            clipAssets.Remove(clipName);
             clipPlayables.Remove(clipName);
             clipIndices.Remove(clipName);
+            if (upperBodyClipPlayables.TryGetValue(clipName, out AnimationClipPlayable upperBodyPlayable))
+            {
+                upperBodyPlayable.Destroy();
+                upperBodyClipPlayables.Remove(clipName);
+                upperBodyClipIndices.Remove(clipName);
+            }
+
             clipWrapModes.Remove(clipName);
         }
 

@@ -113,6 +113,9 @@ namespace Player
 
             if (GetComponent<POTCO.Inventory.PotcoInventoryController>() == null)
                 gameObject.AddComponent<POTCO.Inventory.PotcoInventoryController>();
+
+            if (GetComponent<POTCO.Combat.PotcoWeaponController>() == null)
+                gameObject.AddComponent<POTCO.Combat.PotcoWeaponController>();
         }
 
         private void Start()

@@ -61,6 +61,23 @@ namespace POTCO.Inventory
         public int WeaponRequirement { get; set; }
         public int Power { get; set; }
         public int Barrels { get; set; }
+        public int Attribute1Rank { get; set; }
+        public int Attribute1 { get; set; }
+        public int Attribute2Rank { get; set; }
+        public int Attribute2 { get; set; }
+        public int Attribute3Rank { get; set; }
+        public int Attribute3 { get; set; }
+        public int SkillBoost1Rank { get; set; }
+        public int SkillBoost1 { get; set; }
+        public int SkillBoost2Rank { get; set; }
+        public int SkillBoost2 { get; set; }
+        public int SkillBoost3Rank { get; set; }
+        public int SkillBoost3 { get; set; }
+        public int SpecialAttackRank { get; set; }
+        public int SpecialAttack { get; set; }
+        public int VfxType1 { get; set; }
+        public int VfxType2 { get; set; }
+        public string VfxOffset { get; set; } = string.Empty;
         public int StackLimit { get; set; }
         public int UseSkill { get; set; }
 

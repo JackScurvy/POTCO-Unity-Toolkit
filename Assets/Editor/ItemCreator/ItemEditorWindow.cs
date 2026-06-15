@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using POTCO.ItemCards;
 using UnityEditor;
 using UnityEngine;
 
@@ -17,6 +18,7 @@ namespace POTCO.Editor.ItemCreator
         private PotcoSourceIndex index;
         private ItemCardDataBuilder cardBuilder;
         private ItemPreviewResolver previewResolver;
+        private PotcoEditorItemCardPreviewRenderer previewRenderer;
         private PotcoItemCardRenderer cardRenderer;
 
         private Vector2 listScroll;
@@ -38,13 +40,15 @@ namespace POTCO.Editor.ItemCreator
         private void OnEnable()
         {
             previewResolver = new ItemPreviewResolver();
-            cardRenderer = new PotcoItemCardRenderer(previewResolver);
+            previewRenderer = new PotcoEditorItemCardPreviewRenderer(previewResolver);
+            cardRenderer = new PotcoItemCardRenderer(previewRenderer);
             Reload();
         }
 
         private void OnDisable()
         {
             cardRenderer?.Dispose();
+            previewRenderer?.Dispose();
         }
 
         private void OnGUI()

@@ -59,15 +59,7 @@ public class SkyMenu
 
     private static Light FindDirectionalLight()
     {
-        Light[] lights = Object.FindObjectsByType<Light>(FindObjectsSortMode.None);
-        foreach (Light light in lights)
-        {
-            if (light.type == LightType.Directional)
-            {
-                return light;
-            }
-        }
-        return null;
+        return SkyboxManager.FindSceneDirectionalLight();
     }
 }
 

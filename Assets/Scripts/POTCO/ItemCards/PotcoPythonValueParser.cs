@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
-namespace POTCO.Editor.ItemCreator
+namespace POTCO.ItemCards
 {
     public static class PotcoPythonValueParser
     {

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 
-namespace POTCO.Editor.ItemCreator
+namespace POTCO.ItemCards
 {
     public sealed class ItemCardDataBuilder
     {

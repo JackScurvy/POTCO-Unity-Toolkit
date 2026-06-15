@@ -22,6 +22,9 @@ namespace Player
     [RequireComponent(typeof(POTCO.RuntimeAnimatorPlayer))]
     public class SimpleAnimationPlayer : MonoBehaviour
     {
+        private static readonly string[] AnimationNameSuffixes = { "", "_mtm", "_msf", "_mtp", "_mmi", "_fsf", "_sp_gp4", "_fr_gp1" };
+        private static readonly string[] InMotionAnimationNameSuffixes = { "_mtm", "_msf", "_mtp", "_mmi", "_sp_gp4", "_fr_gp1", "_fsf", "" };
+
         [Header("Gender Detection")]
         [SerializeField] private bool autoDetectGender = true;
         [Tooltip("Manually override gender detection if auto-detection fails")]
@@ -74,6 +77,15 @@ namespace Player
         private bool isInJumpAir = false; // Track if we're in the air portion of jump
         private bool jumpAnimReversing = false; // Track if jump animation is playing backwards
         private bool isPlayingLanding = false; // Track if we're playing the landing animation
+        private bool weaponAnimationOverrideActive = false;
+        private string weaponNeutralAnimation = "";
+        private string weaponWalkAnimation = "";
+        private string weaponRunAnimation = "";
+        private string weaponWalkBackAnimation = "";
+        private string weaponStrafeLeftAnimation = "";
+        private string weaponStrafeRightAnimation = "";
+        private float externalAnimationLockUntil = 0f;
+        private bool externalUpperBodyOverlayActive = false;
 
         private void Awake()
         {
@@ -280,6 +292,16 @@ namespace Player
             // Get active controller (PlayerController or NPCController)
             ControllerAdapter controller = GetActiveController();
             if (controller == null) return;
+
+            bool externalAnimationLocked = externalAnimationLockUntil > Time.time;
+            if (externalUpperBodyOverlayActive && !externalAnimationLocked)
+            {
+                animComponent.StopUpperBodyOverlay(transitionDuration);
+                externalUpperBodyOverlayActive = false;
+            }
+
+            if (externalAnimationLocked && !externalUpperBodyOverlayActive)
+                return;
 
             // Check if landing animation has finished
             if (isPlayingLanding && jumpClip != null)
@@ -671,6 +693,14 @@ namespace Player
             // Try with gender prefix first
             string prefixedName = genderPrefix + animName;
 
+            AnimationClip prefixedVariant = FindAndLoadClipVariant(prefixedName, phases, searchPaths, "Loaded");
+            if (prefixedVariant != null)
+                return prefixedVariant;
+
+            AnimationClip unprefixedVariant = FindAndLoadClipVariant(animName, phases, searchPaths, "Loaded (no prefix)");
+            if (unprefixedVariant != null)
+                return unprefixedVariant;
+
             foreach (string phase in phases)
             {
                 foreach (string path in searchPaths)
@@ -704,6 +734,41 @@ namespace Player
 
             Debug.LogWarning($"⚠️ Could not find animation: {prefixedName} or {animName}");
             return null;
+        }
+
+        private AnimationClip FindAndLoadClipVariant(string animName, string[] phases, string[] searchPaths, string logPrefix)
+        {
+            foreach (string animationName in BuildAnimationNameCandidates(animName))
+            {
+                foreach (string phase in phases)
+                {
+                    foreach (string path in searchPaths)
+                    {
+                        string fullPath = $"{phase}/{path}/{animationName}";
+                        AnimationClip clip = Resources.Load<AnimationClip>(fullPath);
+
+                        if (clip != null)
+                        {
+                            Debug.Log($"âœ… {logPrefix}: {fullPath}");
+                            return clip;
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<string> BuildAnimationNameCandidates(string animName)
+        {
+            return BuildExternalAnimationNameCandidates(animName, false);
+        }
+
+        public static IEnumerable<string> BuildExternalAnimationNameCandidates(string animName, bool preferInMotionVariant)
+        {
+            string[] suffixes = preferInMotionVariant ? InMotionAnimationNameSuffixes : AnimationNameSuffixes;
+            foreach (string suffix in suffixes)
+                yield return animName + suffix;
         }
 
         private void UpdateAnimation(ControllerAdapter controller)
@@ -945,6 +1010,8 @@ namespace Player
                 }
             }
 
+            targetAnim = ApplyWeaponAnimationOverride(targetAnim, controller);
+
             // Only switch if different
             if (targetAnim != currentAnim)
             {
@@ -954,6 +1021,57 @@ namespace Player
             // Track state for next frame
             wasGrounded = controller.IsGrounded;
             wasFalling = controller.IsFalling;
+        }
+
+        private string ApplyWeaponAnimationOverride(string targetAnim, ControllerAdapter controller)
+        {
+            return ResolveWeaponAnimationOverride(
+                targetAnim,
+                weaponAnimationOverrideActive,
+                controller != null && controller.IsSwimming,
+                controller != null && controller.IsGrounded,
+                weaponNeutralAnimation,
+                weaponWalkAnimation,
+                weaponRunAnimation,
+                weaponWalkBackAnimation,
+                weaponStrafeLeftAnimation,
+                weaponStrafeRightAnimation);
+        }
+
+        public static string ResolveWeaponAnimationOverride(
+            string targetAnim,
+            bool overrideActive,
+            bool isSwimming,
+            bool isGrounded,
+            string neutral,
+            string walk,
+            string run,
+            string walkBack,
+            string strafeLeft,
+            string strafeRight)
+        {
+            if (!overrideActive || isSwimming || !isGrounded)
+                return targetAnim;
+
+            if (targetAnim == "idle" && !string.IsNullOrEmpty(neutral))
+                return neutral;
+
+            if (targetAnim == "walk" && !string.IsNullOrEmpty(walk))
+                return walk;
+
+            if (targetAnim == "run" && !string.IsNullOrEmpty(run))
+                return run;
+
+            if ((targetAnim == "walk_back" || targetAnim == "run_back") && !string.IsNullOrEmpty(walkBack))
+                return walkBack;
+
+            if (targetAnim == "strafe_left" && !string.IsNullOrEmpty(strafeLeft))
+                return strafeLeft;
+
+            if (targetAnim == "strafe_right" && !string.IsNullOrEmpty(strafeRight))
+                return strafeRight;
+
+            return targetAnim;
         }
 
         private void PlayAnimation(string animName)
@@ -995,6 +1113,175 @@ namespace Player
 
         // Public API
         public string GenderPrefix => genderPrefix;
+
+        public void SetWeaponAnimationOverride(
+            string neutral,
+            string walk,
+            string run,
+            string walkBack,
+            string strafeLeft,
+            string strafeRight)
+        {
+            weaponNeutralAnimation = RegisterOptionalClip(neutral, WrapMode.Loop) ? neutral : "";
+            weaponWalkAnimation = RegisterOptionalClip(walk, WrapMode.Loop) ? walk : "";
+            weaponRunAnimation = RegisterOptionalClip(run, WrapMode.Loop) ? run : "";
+            weaponWalkBackAnimation = RegisterOptionalClip(walkBack, WrapMode.Loop) ? walkBack : weaponWalkAnimation;
+            weaponStrafeLeftAnimation = RegisterOptionalClip(strafeLeft, WrapMode.Loop) ? strafeLeft : "";
+            weaponStrafeRightAnimation = RegisterOptionalClip(strafeRight, WrapMode.Loop) ? strafeRight : "";
+            weaponAnimationOverrideActive = !string.IsNullOrEmpty(weaponNeutralAnimation) ||
+                                            !string.IsNullOrEmpty(weaponWalkAnimation) ||
+                                            !string.IsNullOrEmpty(weaponRunAnimation) ||
+                                            !string.IsNullOrEmpty(weaponWalkBackAnimation) ||
+                                            !string.IsNullOrEmpty(weaponStrafeLeftAnimation) ||
+                                            !string.IsNullOrEmpty(weaponStrafeRightAnimation);
+        }
+
+        public void ClearWeaponAnimationOverride()
+        {
+            weaponAnimationOverrideActive = false;
+            weaponNeutralAnimation = "";
+            weaponWalkAnimation = "";
+            weaponRunAnimation = "";
+            weaponWalkBackAnimation = "";
+            weaponStrafeLeftAnimation = "";
+            weaponStrafeRightAnimation = "";
+            externalAnimationLockUntil = 0f;
+            externalUpperBodyOverlayActive = false;
+            if (animComponent != null)
+                animComponent.StopUpperBodyOverlay(0.05f);
+        }
+
+        public bool TryPlayExternalAnimation(string animName, WrapMode wrapMode, float transition, float lockSeconds)
+        {
+            return TryPlayExternalAnimation(animName, wrapMode, transition, lockSeconds, 0f);
+        }
+
+        public bool TryPlayExternalAnimation(string animName, WrapMode wrapMode, float transition, float lockSeconds, float maxLockSeconds)
+        {
+            bool restartIfAlreadyPlaying = wrapMode == WrapMode.Once || wrapMode == WrapMode.ClampForever;
+            return TryPlayExternalAnimation(animName, wrapMode, transition, lockSeconds, maxLockSeconds, false, restartIfAlreadyPlaying);
+        }
+
+        public bool TryPlayExternalAnimation(
+            string animName,
+            WrapMode wrapMode,
+            float transition,
+            float lockSeconds,
+            float maxLockSeconds,
+            bool preferInMotionVariant,
+            bool restartIfAlreadyPlaying)
+        {
+            bool isMoving = ShouldPreferInMotionExternalAnimation();
+            bool useMotionVariant = preferInMotionVariant && isMoving;
+            if (!RegisterOptionalClip(animName, wrapMode, useMotionVariant, out string registeredAnimName))
+                return false;
+
+            bool useUpperBodyOverlay = ShouldUseUpperBodyExternalAnimation(preferInMotionVariant, isMoving);
+            if (useUpperBodyOverlay)
+            {
+                animComponent.CrossFadeUpperBody(registeredAnimName, Mathf.Max(0f, transition), restartIfAlreadyPlaying);
+            }
+            else
+            {
+                if (externalUpperBodyOverlayActive)
+                    animComponent.StopUpperBodyOverlay(Mathf.Max(0f, transition));
+
+                float blendWeight = ResolveExternalAnimationBlendWeight(preferInMotionVariant, isMoving);
+                animComponent.CrossFade(registeredAnimName, Mathf.Max(0f, transition), restartIfAlreadyPlaying, blendWeight);
+                currentAnim = registeredAnimName;
+            }
+
+            externalUpperBodyOverlayActive = useUpperBodyOverlay;
+            AnimationClip clip = animComponent.GetClip(registeredAnimName);
+            float lockDuration = ResolveExternalAnimationLockSeconds(lockSeconds, clip != null ? clip.length : 0f, wrapMode, maxLockSeconds);
+            if (lockDuration > 0f)
+                externalAnimationLockUntil = Time.time + lockDuration;
+            else
+                externalAnimationLockUntil = 0f;
+            return true;
+        }
+
+        public static float ResolveExternalAnimationLockSeconds(float requestedLockSeconds, float clipLength, WrapMode wrapMode)
+        {
+            return ResolveExternalAnimationLockSeconds(requestedLockSeconds, clipLength, wrapMode, 0f);
+        }
+
+        public static float ResolveExternalAnimationLockSeconds(float requestedLockSeconds, float clipLength, WrapMode wrapMode, float maxLockSeconds)
+        {
+            float requested = Mathf.Max(0f, requestedLockSeconds);
+            float length = Mathf.Max(0f, clipLength);
+            if (wrapMode == WrapMode.Once || wrapMode == WrapMode.ClampForever)
+            {
+                float duration = Mathf.Max(requested, length);
+                if (maxLockSeconds > 0f)
+                    duration = Mathf.Min(duration, Mathf.Max(requested, maxLockSeconds));
+                return duration;
+            }
+
+            return requested;
+        }
+
+        public static float ResolveExternalAnimationBlendWeight(bool preferInMotionVariant, bool isMoving)
+        {
+            return 1f;
+        }
+
+        public static bool ShouldUseUpperBodyExternalAnimation(bool preferInMotionVariant, bool isMoving)
+        {
+            return preferInMotionVariant;
+        }
+
+        private bool RegisterOptionalClip(string animName, WrapMode wrapMode)
+        {
+            return RegisterOptionalClip(animName, wrapMode, false, out _);
+        }
+
+        private bool RegisterOptionalClip(string animName, WrapMode wrapMode, bool preferInMotionVariant, out string registeredAnimName)
+        {
+            registeredAnimName = animName;
+            foreach (string candidateName in BuildExternalAnimationNameCandidates(animName, preferInMotionVariant))
+            {
+                if (RegisterOptionalClipExact(candidateName, wrapMode))
+                {
+                    registeredAnimName = candidateName;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool RegisterOptionalClipExact(string animName, WrapMode wrapMode)
+        {
+            if (string.IsNullOrEmpty(animName) || animComponent == null)
+                return false;
+
+            if (animComponent.HasClip(animName))
+                return true;
+
+            string[] phases = { "phase_2", "phase_3", "phase_4", "phase_5", "phase_6" };
+            string[] searchPaths = { "char", "models/char" };
+            AnimationClip clip = FindAndLoadClip(animName, phases, searchPaths);
+            if (clip == null)
+                return false;
+
+            animComponent.AddClip(clip, animName);
+            animComponent.SetWrapMode(animName, wrapMode);
+            return true;
+        }
+
+        private bool ShouldPreferInMotionExternalAnimation()
+        {
+            ControllerAdapter controller = GetActiveController();
+            if (controller == null || controller.IsSwimming || !controller.IsGrounded)
+                return false;
+
+            Vector3 planarVelocity = new Vector3(controller.Velocity.x, 0f, controller.Velocity.z);
+            return controller.MoveInput.magnitude > 0.1f ||
+                   Mathf.Abs(controller.StrafeInput) > 0.1f ||
+                   controller.CurrentSpeed > 0.1f ||
+                   planarVelocity.magnitude > 0.1f;
+        }
 
         public void PlayEmote(string emoteName)
         {

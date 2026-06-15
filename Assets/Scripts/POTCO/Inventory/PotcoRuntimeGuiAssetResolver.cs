@@ -89,6 +89,7 @@ namespace POTCO.Inventory
         public const string SeaChestGui = "phase_2/models/gui/gui_sea_chest";
         public const string MainGui = "phase_2/models/gui/gui_main";
         public const string CharGui = "phase_2/models/gui/char_gui";
+        public const string CardDetailGui = "phase_2/models/gui/gui_card_detail";
         public const string WeaponIconsGui = "phase_2/models/gui/gui_icons_weapon";
         public const string InventoryIconsGui = "phase_2/models/gui/gui_icons_inventory";
         public const string JewelryIconsGui = "phase_2/models/gui/gui_icons_jewelry";
@@ -203,7 +204,11 @@ namespace POTCO.Inventory
             {
                 Texture2D texture = LoadTexture(resourcePath);
                 if (texture != null)
-                    return new PotcoGuiRegion(textureName, resourcePath, string.Empty, FullTexCoords, texture, null);
+                {
+                    string alphaResourcePath = resourcePath + "_a";
+                    Texture2D alphaTexture = LoadTexture(alphaResourcePath);
+                    return new PotcoGuiRegion(textureName, resourcePath, alphaTexture == null ? string.Empty : alphaResourcePath, FullTexCoords, texture, alphaTexture);
+                }
             }
 
             return PotcoGuiRegion.Empty;
@@ -232,6 +237,30 @@ namespace POTCO.Inventory
             }
 
             return PotcoGuiRegion.Empty;
+        }
+
+        public PotcoGuiRegion ResolveSkillIcon(string iconName)
+        {
+            if (string.IsNullOrEmpty(iconName))
+                return PotcoGuiRegion.Empty;
+
+            string[] modelSearchOrder =
+            {
+                SkillIconsGui,
+                BuffIconsGui,
+                InventoryIconsGui,
+                WeaponIconsGui,
+                TopLevelGui
+            };
+
+            foreach (string model in modelSearchOrder)
+            {
+                PotcoGuiRegion region = ResolveRegion(model, iconName);
+                if (region.IsDefined)
+                    return region;
+            }
+
+            return ResolveLooseTexture(iconName);
         }
 
         public PotcoGuiSprite ResolveItemSprite(PotcoItemDefinition definition)

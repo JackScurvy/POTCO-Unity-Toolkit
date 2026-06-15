@@ -337,19 +337,7 @@ namespace POTCO.Sky
             RenderSettings.skybox = skyboxMaterial;
             DynamicGI.UpdateEnvironment();
 
-            // Find directional light if not assigned
-            if (updateDirectionalLight && directionalLight == null)
-            {
-                Light[] lights = FindObjectsByType<Light>(FindObjectsSortMode.None);
-                foreach (Light light in lights)
-                {
-                    if (light.type == LightType.Directional)
-                    {
-                        directionalLight = light;
-                        break;
-                    }
-                }
-            }
+            EnsureDirectionalLightBinding();
 
             // Initialize current settings
             currentSettings = GetSettingsForPreset(currentPreset);
@@ -420,6 +408,7 @@ namespace POTCO.Sky
             }
 
             // Update directional light (works in both modes)
+            EnsureDirectionalLightBinding();
             if (updateDirectionalLight && directionalLight != null)
             {
                 Vector3 sunDir = currentSettings.sunDirection;
@@ -440,6 +429,47 @@ namespace POTCO.Sky
                 RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
                 RenderSettings.ambientIntensity = ambientIntensity;
             }
+        }
+
+        void EnsureDirectionalLightBinding()
+        {
+            if (!updateDirectionalLight)
+                return;
+
+            if (IsSceneDirectionalLightCandidate(directionalLight))
+                return;
+
+            directionalLight = FindSceneDirectionalLight();
+        }
+
+        public static Light FindSceneDirectionalLight()
+        {
+            Light[] lights = FindObjectsByType<Light>(FindObjectsSortMode.None);
+            foreach (Light light in lights)
+            {
+                if (IsSceneDirectionalLightCandidate(light))
+                    return light;
+            }
+
+            return null;
+        }
+
+        public static bool IsSceneDirectionalLightCandidate(Light light)
+        {
+            if (light == null || light.type != LightType.Directional || !light.enabled)
+                return false;
+
+            if ((light.hideFlags & HideFlags.DontSave) != 0)
+                return false;
+
+            GameObject lightObject = light.gameObject;
+            if (lightObject == null || !lightObject.activeInHierarchy)
+                return false;
+
+            if ((lightObject.hideFlags & HideFlags.DontSave) != 0)
+                return false;
+
+            return lightObject.scene.IsValid();
         }
 
         /// <summary>

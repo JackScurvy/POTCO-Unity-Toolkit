@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace POTCO.Editor.ItemCreator
+namespace POTCO.ItemCards
 {
     public sealed class PotcoSourceIndex
     {

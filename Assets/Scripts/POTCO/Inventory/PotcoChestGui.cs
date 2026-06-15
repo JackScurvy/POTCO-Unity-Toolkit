@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using POTCO.ItemCards;
 using UnityEngine;
 
 namespace POTCO.Inventory
@@ -111,6 +112,10 @@ namespace POTCO.Inventory
         private PotcoRuntimeGuiAssetResolver resolver;
         private PotcoChestTextureSkin textureSkin;
         private PotcoChestNativeGuiLayer nativeGuiLayer;
+        private PotcoSourceIndex itemCardSourceIndex;
+        private ItemCardDataBuilder itemCardBuilder;
+        private PotcoRuntimeItemCardPreviewRenderer itemCardPreviewRenderer;
+        private PotcoItemCardRenderer itemCardRenderer;
         private readonly Dictionary<string, Material> guiAlphaMaterials = new Dictionary<string, Material>(StringComparer.Ordinal);
 
         private bool open;
@@ -142,6 +147,7 @@ namespace POTCO.Inventory
             layout = PotcoChestLayout.CreateDefault();
             resolver = new PotcoRuntimeGuiAssetResolver();
             textureSkin = PotcoChestTextureSkin.CreateDefault(resolver);
+            InitializeItemCardRenderer();
             nativeGuiLayer = GetComponent<PotcoChestNativeGuiLayer>();
             if (nativeGuiLayer == null)
                 nativeGuiLayer = gameObject.AddComponent<PotcoChestNativeGuiLayer>();
@@ -156,6 +162,26 @@ namespace POTCO.Inventory
             }
 
             guiAlphaMaterials.Clear();
+            itemCardRenderer?.Dispose();
+            itemCardPreviewRenderer?.Dispose();
+        }
+
+        private void InitializeItemCardRenderer()
+        {
+            itemCardPreviewRenderer = new PotcoRuntimeItemCardPreviewRenderer();
+            itemCardRenderer = new PotcoItemCardRenderer(itemCardPreviewRenderer, resolver);
+
+            try
+            {
+                itemCardSourceIndex = PotcoSourceIndex.LoadFromAssetsPath(Application.dataPath);
+                itemCardBuilder = new ItemCardDataBuilder(itemCardSourceIndex);
+            }
+            catch (Exception ex)
+            {
+                itemCardSourceIndex = null;
+                itemCardBuilder = null;
+                Debug.LogWarning($"POTCO inventory item cards could not load source data: {ex.Message}");
+            }
         }
 
         private void Update()
@@ -1276,26 +1302,81 @@ namespace POTCO.Inventory
             if (hovered == null)
                 return;
 
-            Rect tooltip = new Rect(current.mousePosition.x + 18f, current.mousePosition.y + 18f, 250f, 130f);
+            ItemCardData card = BuildHoveredItemCard(hovered);
+            if (card == null || itemCardRenderer == null)
+                return;
+
+            const float cardWidth = 300f;
+            float cardHeight = itemCardRenderer.GetPreferredHeight(card, cardWidth);
+            Rect tooltip = new Rect(current.mousePosition.x + 18f, current.mousePosition.y + 18f, cardWidth, cardHeight);
             if (tooltip.xMax > Screen.width)
                 tooltip.x = Screen.width - tooltip.width - 8f;
             if (tooltip.yMax > Screen.height)
                 tooltip.y = Screen.height - tooltip.height - 8f;
+            tooltip.x = Mathf.Max(8f, tooltip.x);
+            tooltip.y = Mathf.Max(8f, tooltip.y);
+
+            ItemDataRow row = null;
+            itemCardSourceIndex?.Items.TryGetValue(hovered.ItemId, out row);
+            itemCardRenderer.Draw(tooltip, card, row, itemCardSourceIndex);
+        }
+
+        private ItemCardData BuildHoveredItemCard(PotcoInventoryItemStack hovered)
+        {
+            if (hovered == null)
+                return null;
+
+            if (itemCardBuilder != null &&
+                itemCardSourceIndex != null &&
+                itemCardSourceIndex.Items.TryGetValue(hovered.ItemId, out ItemDataRow row))
+            {
+                return itemCardBuilder.Build(row);
+            }
 
             PotcoItemDefinition definition = hovered.Definition;
-            string rarity = controller.Catalog.GetRarityName(definition.Rarity);
-            string body = definition.EffectiveDisplayName;
-            if (!string.IsNullOrEmpty(rarity))
-                body += "\n" + rarity + " " + definition.Category;
-            if (definition.Power > 0)
-                body += "\nAttack: " + definition.Power;
-            if (definition.StackLimit > 1)
-                body += $"\nStack: {hovered.Quantity}/{definition.StackLimit}";
-            if (!string.IsNullOrEmpty(definition.FlavorText) && definition.FlavorText != "0")
-                body += "\n\n" + definition.FlavorText;
+            if (definition == null)
+                return null;
 
-            GUI.Box(tooltip, GUIContent.none);
-            GUI.Label(tooltip.Contract(10f), body, tooltipStyle);
+            string rarity = controller.Catalog.GetRarityName(definition.Rarity);
+            string subtitle = string.IsNullOrEmpty(rarity)
+                ? definition.Category.ToString()
+                : rarity + " " + definition.Category;
+
+            return new ItemCardData
+            {
+                ItemId = hovered.ItemId,
+                ItemClass = ToItemClass(definition.Category),
+                Rarity = definition.Rarity,
+                Title = definition.EffectiveDisplayName,
+                Subtitle = subtitle,
+                GoldCost = Math.Max(0, definition.GoldCost).ToString(),
+                AttackPower = definition.Category == PotcoInventoryCategory.Weapon && definition.Power > 0 ? definition.Power.ToString() : string.Empty,
+                FlavorText = definition.FlavorText == "0" ? string.Empty : definition.FlavorText,
+                IconName = definition.IconName,
+                ModelName = definition.ModelName,
+                PreviewMode = string.IsNullOrEmpty(definition.ModelName) ? ItemPreviewMode.Icon : ItemPreviewMode.Model
+            };
+        }
+
+        private static PotcoItemClass ToItemClass(PotcoInventoryCategory category)
+        {
+            switch (category)
+            {
+                case PotcoInventoryCategory.Weapon:
+                    return PotcoItemClass.Weapon;
+                case PotcoInventoryCategory.Clothing:
+                    return PotcoItemClass.Clothing;
+                case PotcoInventoryCategory.Tattoo:
+                    return PotcoItemClass.Tattoo;
+                case PotcoInventoryCategory.Jewelry:
+                    return PotcoItemClass.Jewelry;
+                case PotcoInventoryCategory.Charm:
+                    return PotcoItemClass.Charm;
+                case PotcoInventoryCategory.Consumable:
+                    return PotcoItemClass.Consumable;
+                default:
+                    return PotcoItemClass.Consumable;
+            }
         }
 
         private PotcoInventoryItemStack FindHoveredItem(Vector2 mouse)

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 
-namespace POTCO.Editor.ItemCreator
+namespace POTCO.ItemCards
 {
     public sealed class ItemDataValue
     {
