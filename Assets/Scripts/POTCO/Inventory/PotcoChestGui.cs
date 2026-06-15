@@ -1577,7 +1577,8 @@ namespace POTCO.Inventory
 
         private void DrawTextureWithTexCoords(Rect rect, Texture2D texture, Texture2D alphaTexture, Rect texCoords, Color tint, bool flipAlphaY = false)
         {
-            Material alphaMaterial = alphaTexture != null ? GetGuiAlphaMaterial(alphaTexture, flipAlphaY) : null;
+            bool effectiveFlipAlphaY = PotcoGuiAlpha.ShouldFlipAlphaY(alphaTexture, flipAlphaY);
+            Material alphaMaterial = alphaTexture != null ? GetGuiAlphaMaterial(alphaTexture, effectiveFlipAlphaY) : null;
             if (alphaMaterial != null)
             {
                 Graphics.DrawTexture(rect, texture, texCoords, 0, 0, 0, 0, tint, alphaMaterial);
@@ -1604,13 +1605,14 @@ namespace POTCO.Inventory
                 return;
 
             Texture2D alphaTexture = region.AlphaTexture != null ? region.AlphaTexture : Texture2D.whiteTexture;
-            Material material = GetGuiAlphaMaterial(alphaTexture, false);
+            bool effectiveFlipAlphaY = PotcoGuiAlpha.ShouldFlipAlphaY(region.AlphaTexture, false);
+            Material material = GetGuiAlphaMaterial(alphaTexture, effectiveFlipAlphaY);
             if (material == null)
                 return;
 
             material.SetTexture("_MainTex", region.Texture);
             material.SetTexture("_AlphaTex", alphaTexture);
-            material.SetFloat("_FlipAlphaY", 0f);
+            material.SetFloat("_FlipAlphaY", effectiveFlipAlphaY ? 1f : 0f);
 
             GL.PushMatrix();
             GL.LoadPixelMatrix(0f, Screen.width, Screen.height, 0f);
@@ -1641,7 +1643,7 @@ namespace POTCO.Inventory
             if (alphaTexture == null)
                 return null;
 
-            string key = alphaTexture.GetInstanceID().ToString() + (flipAlphaY ? "|flip" : "|normal");
+            string key = PotcoGuiAlpha.BuildMaterialCacheKey(alphaTexture, flipAlphaY);
             if (guiAlphaMaterials.TryGetValue(key, out Material cached) && cached != null)
                 return cached;
 
@@ -1704,13 +1706,14 @@ namespace POTCO.Inventory
                 return true;
 
             Texture2D alphaTexture = part.AlphaTexture != null ? part.AlphaTexture : Texture2D.whiteTexture;
-            Material material = GetGuiAlphaMaterial(alphaTexture, flipAlphaY);
+            bool effectiveFlipAlphaY = PotcoGuiAlpha.ShouldFlipAlphaY(part.AlphaTexture, flipAlphaY);
+            Material material = GetGuiAlphaMaterial(alphaTexture, effectiveFlipAlphaY);
             if (material == null)
                 return false;
 
             material.SetTexture("_MainTex", part.Texture);
             material.SetTexture("_AlphaTex", alphaTexture);
-            material.SetFloat("_FlipAlphaY", flipAlphaY ? 1f : 0f);
+            material.SetFloat("_FlipAlphaY", effectiveFlipAlphaY ? 1f : 0f);
 
             GL.PushMatrix();
             GL.LoadPixelMatrix(0f, Screen.width, Screen.height, 0f);

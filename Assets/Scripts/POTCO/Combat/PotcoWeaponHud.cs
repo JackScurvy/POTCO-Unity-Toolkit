@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using POTCO.Inventory;
 using UnityEngine;
 
@@ -6,11 +7,14 @@ namespace POTCO.Combat
     [DisallowMultipleComponent]
     public sealed class PotcoWeaponHud : MonoBehaviour
     {
+        private const string GuiAlphaShaderResource = "Shaders/PotcoGuiTextureWithAlpha";
+
         [SerializeField] private bool visible = true;
 
         private PotcoWeaponController weaponController;
         private PotcoInventoryController inventoryController;
         private PotcoRuntimeGuiAssetResolver guiResolver;
+        private readonly Dictionary<string, Material> alphaMaterials = new Dictionary<string, Material>(System.StringComparer.Ordinal);
         private GUIStyle slotStyle;
         private GUIStyle selectedSlotStyle;
         private GUIStyle skillSlotStyle;
@@ -22,6 +26,17 @@ namespace POTCO.Combat
             weaponController = GetComponent<PotcoWeaponController>();
             inventoryController = GetComponent<PotcoInventoryController>();
             guiResolver = new PotcoRuntimeGuiAssetResolver();
+        }
+
+        private void OnDestroy()
+        {
+            foreach (Material material in alphaMaterials.Values)
+            {
+                if (material != null)
+                    Destroy(material);
+            }
+
+            alphaMaterials.Clear();
         }
 
         private void OnGUI()
@@ -151,11 +166,7 @@ namespace POTCO.Combat
             if (icon.Texture == null)
                 return false;
 
-            Color old = GUI.color;
-            GUI.color = Color.white;
-            GUI.DrawTextureWithTexCoords(rect, icon.Texture, icon.TexCoords, true);
-            GUI.color = old;
-            return true;
+            return DrawRegion(rect, icon, true);
         }
 
         private void DrawSkillStrip(Rect screenRect)
@@ -197,20 +208,62 @@ namespace POTCO.Combat
                 return drewBase;
 
             Rect iconRect = new Rect(rect.x + 3f, rect.y + 3f, rect.width - 6f, rect.height - 6f);
-            DrawRegion(iconRect, icon);
+            DrawRegion(iconRect, icon, true);
             return true;
         }
 
-        private static bool DrawRegion(Rect rect, PotcoGuiRegion region)
+        private bool DrawRegion(Rect rect, PotcoGuiRegion region)
+        {
+            return DrawRegion(rect, region, true);
+        }
+
+        private bool DrawRegion(Rect rect, PotcoGuiRegion region, bool flipAlphaY)
         {
             if (region == null || region.Texture == null)
                 return false;
+
+            bool effectiveFlipAlphaY = PotcoGuiAlpha.ShouldFlipAlphaY(region.AlphaTexture, flipAlphaY);
+            Material material = region.AlphaTexture != null ? GetAlphaMaterial(region.AlphaTexture, effectiveFlipAlphaY) : null;
+            if (material != null && Event.current.type == EventType.Repaint)
+            {
+                material.SetTexture("_MainTex", region.Texture);
+                material.SetTexture("_AlphaTex", region.AlphaTexture);
+                material.SetFloat("_FlipAlphaY", effectiveFlipAlphaY ? 1f : 0f);
+                Graphics.DrawTexture(rect, region.Texture, region.TexCoords, 0, 0, 0, 0, Color.white, material);
+                return true;
+            }
 
             Color old = GUI.color;
             GUI.color = Color.white;
             GUI.DrawTextureWithTexCoords(rect, region.Texture, region.TexCoords, true);
             GUI.color = old;
             return true;
+        }
+
+        private Material GetAlphaMaterial(Texture2D alphaTexture, bool flipAlphaY)
+        {
+            if (alphaTexture == null)
+                return null;
+
+            string key = PotcoGuiAlpha.BuildMaterialCacheKey(alphaTexture, flipAlphaY);
+            if (alphaMaterials.TryGetValue(key, out Material cached) && cached != null)
+                return cached;
+
+            Shader shader = Resources.Load<Shader>(GuiAlphaShaderResource);
+            if (shader == null)
+                shader = Shader.Find("POTCO/GuiTextureWithAlpha");
+            if (shader == null)
+                return null;
+
+            Material material = new Material(shader)
+            {
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            material.SetTexture("_AlphaTex", alphaTexture);
+            material.SetColor("_Color", Color.white);
+            material.SetFloat("_FlipAlphaY", flipAlphaY ? 1f : 0f);
+            alphaMaterials[key] = material;
+            return material;
         }
 
         private static void DrawRarityAccent(Rect rect, PotcoInventoryItemStack stack)

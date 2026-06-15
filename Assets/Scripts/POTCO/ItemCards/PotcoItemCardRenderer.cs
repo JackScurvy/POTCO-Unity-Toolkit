@@ -196,7 +196,7 @@ namespace POTCO.ItemCards
             Rect amountRect = new Rect(rect.x, rect.y, rect.width - 15, rect.height);
             GUI.Label(amountRect, goldCost, smallStyle);
 
-            if (!DrawGuiRegion(coinRect, guiAssets.ResolveRegion(PotcoRuntimeGuiAssetResolver.TopLevelGui, "treasure_w_coin"), Color.white, true))
+            if (!DrawGuiRegion(coinRect, guiAssets.ResolveRegion(PotcoRuntimeGuiAssetResolver.TopLevelGui, "treasure_w_coin"), Color.white, true, true))
             {
                 Color old = GUI.color;
                 GUI.color = new Color(0.78f, 0.55f, 0.18f);
@@ -334,12 +334,13 @@ namespace POTCO.ItemCards
                 return false;
 
             Rect drawRect = preserveAspect ? ScaleToFit(rect, region) : rect;
-            Material material = region.AlphaTexture != null ? GetAlphaMaterial(region.AlphaTexture, flipAlphaY) : null;
+            bool effectiveFlipAlphaY = PotcoGuiAlpha.ShouldFlipAlphaY(region.AlphaTexture, flipAlphaY);
+            Material material = region.AlphaTexture != null ? GetAlphaMaterial(region.AlphaTexture, effectiveFlipAlphaY) : null;
             if (material != null && Event.current.type == EventType.Repaint)
             {
                 material.SetTexture("_MainTex", region.Texture);
                 material.SetTexture("_AlphaTex", region.AlphaTexture);
-                material.SetFloat("_FlipAlphaY", flipAlphaY ? 1f : 0f);
+                material.SetFloat("_FlipAlphaY", effectiveFlipAlphaY ? 1f : 0f);
                 Graphics.DrawTexture(drawRect, region.Texture, region.TexCoords, 0, 0, 0, 0, tint, material);
                 return true;
             }
@@ -356,7 +357,7 @@ namespace POTCO.ItemCards
             if (alphaTexture == null)
                 return null;
 
-            string key = alphaTexture.GetInstanceID().ToString() + (flipAlphaY ? "|flip" : "|normal");
+            string key = PotcoGuiAlpha.BuildMaterialCacheKey(alphaTexture, flipAlphaY);
             if (alphaMaterials.TryGetValue(key, out Material cached) && cached != null)
                 return cached;
 

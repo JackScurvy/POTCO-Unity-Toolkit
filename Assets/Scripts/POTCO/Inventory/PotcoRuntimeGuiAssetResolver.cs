@@ -83,6 +83,21 @@ namespace POTCO.Inventory
         public bool HasTriangleGeometry => LocalVertices.Count >= 3 && LocalVertices.Count == UvVertices.Count;
     }
 
+    public static class PotcoGuiAlpha
+    {
+        public const bool ImportedRgbAlphaMasksNeedVerticalFlip = true;
+
+        public static bool ShouldFlipAlphaY(Texture2D alphaTexture, bool requestedFlipAlphaY)
+        {
+            return alphaTexture != null && (requestedFlipAlphaY || ImportedRgbAlphaMasksNeedVerticalFlip);
+        }
+
+        public static string BuildMaterialCacheKey(Texture2D alphaTexture, bool flipAlphaY)
+        {
+            return alphaTexture == null ? string.Empty : alphaTexture.GetInstanceID().ToString() + (flipAlphaY ? "|flip" : "|normal");
+        }
+    }
+
     public sealed class PotcoRuntimeGuiAssetResolver
     {
         public const string TopLevelGui = "phase_2/models/gui/toplevel_gui";
