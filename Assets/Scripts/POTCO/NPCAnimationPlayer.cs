@@ -507,13 +507,33 @@ namespace POTCO
             string customKey = !string.IsNullOrEmpty(customModelPrefix) ? $"CUSTOM_{customModelPrefix}_{animName}" : null;
             string genderKey = $"{genderPrefix}{animName}";
             string genericKey = animName;
+            string skeletonStyle = null;
+            if (npcData != null && npcData.enemyKind == PotcoEnemyKind.Skeleton)
+                skeletonStyle = string.IsNullOrEmpty(npcData.enemyBipedAnimStyle) ? npcData.animSet : npcData.enemyBipedAnimStyle;
+            string skeletonKey = !string.IsNullOrEmpty(skeletonStyle) ? $"SKELETON_{skeletonStyle}_{animName}" : null;
 
             // CHECK CACHE FIRST (Instant return)
+            if (skeletonKey != null && s_globalClipCache.TryGetValue(skeletonKey, out var cachedSkeleton)) return cachedSkeleton;
             if (customKey != null && s_globalClipCache.TryGetValue(customKey, out var cachedCustom)) return cachedCustom;
             if (s_globalClipCache.TryGetValue(genderKey, out var cachedGender)) return cachedGender;
             if (s_globalClipCache.TryGetValue(genericKey, out var cachedGeneric)) return cachedGeneric;
 
             // --- EXPENSIVE SEARCH LOGIC (Run only once per animation type) ---
+
+            // PRIORITY 0: POTCO skeleton style suffixes from npc/Skeleton.py.
+            if (skeletonKey != null)
+            {
+                foreach (string fullPath in PotcoBipedAnimationResolver.BuildResourceCandidates(animName, skeletonStyle))
+                {
+                    AnimationClip clip = Resources.Load<AnimationClip>(fullPath);
+                    if (clip != null)
+                    {
+                        DebugLogger.LogNPCAnimation($"Loaded POTCO skeleton anim: {fullPath}");
+                        s_globalClipCache[skeletonKey] = clip;
+                        return clip;
+                    }
+                }
+            }
 
             // PRIORITY 1: Custom Model
             if (!string.IsNullOrEmpty(customModelPrefix))

@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections.Generic;
+using System;
 
 namespace POTCO
 {
@@ -52,12 +53,39 @@ namespace POTCO
         [Tooltip("Creature model path from .py file (e.g., 'models/char/alligator_hi')")]
         [SerializeField] private string creatureModelPath = "";
 
+        [Tooltip("Resolved POTCO enemy spawn definition parsed from AvatarTypes.py and EnemyGlobals.py")]
+        [SerializeField] private PotcoEnemySpawnDefinition enemyDefinition = new PotcoEnemySpawnDefinition();
+
+        [Header("World Data Animations")]
+        [Tooltip("AnimSet imported from the world data file for this spawn node")]
+        [SerializeField] private string worldAnimSet = "";
+
+        [Tooltip("Greeting Animation imported from the world data file for this spawn node")]
+        [SerializeField] private string worldGreetingAnimation = "";
+
+        [Tooltip("Notice Animation 1 imported from the world data file for this spawn node")]
+        [SerializeField] private string worldNoticeAnimation1 = "";
+
+        [Tooltip("Notice Animation 2 imported from the world data file for this spawn node")]
+        [SerializeField] private string worldNoticeAnimation2 = "";
+
         [Header("Editor Spawning")]
         [Tooltip("Has this spawn node already spawned its creatures?")]
         [SerializeField] private bool hasSpawned = false;
 
         // Spawned entity references
         private List<GameObject> spawnedEntities = new List<GameObject>();
+        private const float PotcoBipedVisualYawOffset = 180f;
+
+        public PotcoEnemySpawnDefinition EnemyDefinition => enemyDefinition;
+
+        public void SetWorldAnimationData(string animSet, string greetingAnimation, string noticeAnimation1, string noticeAnimation2)
+        {
+            worldAnimSet = animSet ?? "";
+            worldGreetingAnimation = greetingAnimation ?? "";
+            worldNoticeAnimation1 = noticeAnimation1 ?? "";
+            worldNoticeAnimation2 = noticeAnimation2 ?? "";
+        }
 
         /// <summary>
         /// Set creature type flag, species, and model path (called during import from editor)
@@ -67,6 +95,24 @@ namespace POTCO
             isCreatureType = isCreature;
             creatureSpecies = species;
             creatureModelPath = modelPath;
+        }
+
+        public void SetEnemyDefinition(PotcoEnemySpawnDefinition definition)
+        {
+            enemyDefinition = definition?.Clone() ?? new PotcoEnemySpawnDefinition();
+
+            if (enemyDefinition.IsValid)
+            {
+                PotcoEnemyVariantData firstCreature = enemyDefinition.Variants.Find(v => v != null && v.Kind == PotcoEnemyKind.Creature);
+                if (firstCreature != null)
+                {
+                    SetCreatureInfo(true, firstCreature.CreatureSpecies, firstCreature.CreatureModelPath);
+                }
+                else
+                {
+                    SetCreatureInfo(false, "", "");
+                }
+            }
         }
 
         /// <summary>
@@ -156,30 +202,29 @@ namespace POTCO
         /// </summary>
         private void SpawnEnemies()
         {
-            // Parse spawnable name (e.g., "Crab T1" -> "Crab")
-            string baseSpawnable = GetBaseSpawnableName(spawnables);
-            bool isCreature = IsCreatureType(baseSpawnable);
-
             Debug.Log($"[SpawnNode] ========================================");
             Debug.Log($"[SpawnNode] SpawnEnemies() called");
-            Debug.Log($"[SpawnNode] Spawnables: '{spawnables}' -> Base: '{baseSpawnable}'");
-            Debug.Log($"[SpawnNode] IsCreature: {isCreature} (cached: {isCreatureType})");
+            Debug.Log($"[SpawnNode] Spawnables: '{spawnables}'");
+            Debug.Log($"[SpawnNode] Definition valid: {enemyDefinition != null && enemyDefinition.IsValid}");
             Debug.Log($"[SpawnNode] Spawn Count: {spawnCount}");
             Debug.Log($"[SpawnNode] ========================================");
 
             for (int i = 0; i < spawnCount; i++)
             {
                 GameObject spawned = null;
+                PotcoEnemyVariantData variant = enemyDefinition != null && enemyDefinition.IsValid
+                    ? enemyDefinition.ChooseVariant()
+                    : null;
 
-                if (isCreature)
+                if (variant != null)
                 {
-                    Debug.Log($"[SpawnNode] Attempting to spawn creature: {baseSpawnable}");
-                    spawned = SpawnCreature(baseSpawnable);
+                    spawned = SpawnEnemyVariant(variant);
                 }
                 else
                 {
-                    Debug.Log($"[SpawnNode] Attempting to spawn human enemy: {baseSpawnable}");
-                    spawned = SpawnHumanEnemy(baseSpawnable);
+                    string baseSpawnable = GetBaseSpawnableName(spawnables);
+                    bool isCreature = IsCreatureType(baseSpawnable);
+                    spawned = isCreature ? SpawnLegacyCreature(baseSpawnable) : SpawnLegacyHumanEnemy(baseSpawnable);
                 }
 
                 if (spawned != null)
@@ -190,7 +235,7 @@ namespace POTCO
                     // Apply spawn point offset for multiple spawns
                     if (i > 0)
                     {
-                        Vector3 offset = Random.insideUnitCircle * 2f;
+                        Vector3 offset = UnityEngine.Random.insideUnitCircle * 2f;
                         spawned.transform.position += new Vector3(offset.x, 0, offset.y);
                     }
                 }
@@ -201,6 +246,362 @@ namespace POTCO
             }
 
             Debug.Log($"[SpawnNode] SpawnEnemies() complete. Total spawned: {spawnedEntities.Count}");
+        }
+
+        private GameObject SpawnEnemyVariant(PotcoEnemyVariantData variant)
+        {
+            if (variant == null)
+                return null;
+
+            int level = variant.PickLevel();
+            Debug.Log($"[SpawnNode] Spawning POTCO enemy {variant.TypeName} ({variant.Kind}) level {level}");
+
+            switch (variant.Kind)
+            {
+                case PotcoEnemyKind.Creature:
+                    return SpawnCreature(variant, level);
+                case PotcoEnemyKind.Skeleton:
+                    return SpawnSkeletonEnemy(variant, level);
+                case PotcoEnemyKind.Human:
+                    return SpawnHumanEnemy(variant, level);
+                default:
+                    Debug.LogWarning($"[SpawnNode] Unknown enemy kind for {variant.TypeName}; using human fallback");
+                    return SpawnHumanEnemy(variant, level);
+            }
+        }
+
+        private GameObject SpawnCreature(PotcoEnemyVariantData variant, int level)
+        {
+            if (variant == null || string.IsNullOrEmpty(variant.CreatureModelPath))
+                return null;
+
+            GameObject creaturePrefab = LoadCreaturePrefab(variant.CreatureModelPath);
+            if (creaturePrefab == null)
+                Debug.LogWarning($"[SpawnNode] Missing creature model '{variant.CreatureModelPath}' for {variant.TypeName}; using fallback capsule");
+
+            GameObject enemyRoot = new GameObject($"Enemy_{variant.TypeName}_Lv{level}");
+            enemyRoot.transform.SetParent(transform, false);
+            enemyRoot.transform.localPosition = Vector3.zero;
+            enemyRoot.transform.localRotation = Quaternion.identity;
+
+            GameObject model = creaturePrefab != null
+                ? InstantiateModel(creaturePrefab, enemyRoot.transform)
+                : CreateFallbackPrimitive($"{variant.TypeName}_Fallback", PrimitiveType.Capsule, enemyRoot.transform);
+
+            RuntimeAnimatorPlayer animComponent = model.GetComponent<RuntimeAnimatorPlayer>();
+            if (animComponent == null)
+            {
+                animComponent = model.AddComponent<RuntimeAnimatorPlayer>();
+                animComponent.Initialize();
+            }
+
+            string species = string.IsNullOrEmpty(variant.CreatureSpecies) ? variant.TypeName : variant.CreatureSpecies;
+            LoadCreatureAnimations(animComponent, species);
+            AddCreatureAnimationPlayer(model, species);
+            ConfigureEnemyRuntime(enemyRoot, variant, level, species);
+            return enemyRoot;
+        }
+
+        private GameObject SpawnSkeletonEnemy(PotcoEnemyVariantData variant, int level)
+        {
+            GameObject skeletonPrefab = LoadSkeletonPrefab(variant.SkeletonModelPath);
+            if (skeletonPrefab == null)
+                Debug.LogWarning($"[SpawnNode] Missing skeleton model '{variant.SkeletonModelPath}' for {variant.TypeName}; using fallback capsule");
+
+            GameObject enemyRoot = new GameObject($"Enemy_{variant.TypeName}_Lv{level}");
+            enemyRoot.transform.SetParent(transform, false);
+            enemyRoot.transform.localPosition = Vector3.zero;
+            enemyRoot.transform.localRotation = Quaternion.identity;
+
+            GameObject model = skeletonPrefab != null
+                ? InstantiateModel(skeletonPrefab, enemyRoot.transform)
+                : CreateFallbackPrimitive($"{variant.TypeName}_Fallback", PrimitiveType.Capsule, enemyRoot.transform);
+            ApplyBipedVisualFacing(model);
+
+            RuntimeAnimatorPlayer animComponent = model.GetComponent<RuntimeAnimatorPlayer>();
+            if (animComponent == null)
+            {
+                animComponent = model.AddComponent<RuntimeAnimatorPlayer>();
+                animComponent.Initialize();
+            }
+
+            LoadBipedAnimations(animComponent, variant.SkeletonStyle);
+            ConfigureEnemyRuntime(enemyRoot, variant, level, variant.SkeletonStyle);
+            return enemyRoot;
+        }
+
+        private GameObject SpawnHumanEnemy(PotcoEnemyVariantData variant, int level)
+        {
+            GameObject enemyRoot = new GameObject($"Enemy_{variant.TypeName}_Lv{level}");
+            enemyRoot.transform.SetParent(transform, false);
+            enemyRoot.transform.localPosition = Vector3.zero;
+            enemyRoot.transform.localRotation = Quaternion.identity;
+
+            GameObject human = PotcoEnemyHumanFactory.CreateHumanEnemy(variant, enemyRoot.transform);
+            if (human == null)
+            {
+                DestroyImmediateSafe(enemyRoot);
+                return null;
+            }
+
+            human.transform.localPosition = Vector3.zero;
+            ApplyBipedVisualFacing(human);
+            human.transform.localScale = Vector3.one;
+            RuntimeAnimatorPlayer animComponent = human.GetComponent<RuntimeAnimatorPlayer>();
+            if (animComponent == null)
+            {
+                animComponent = human.AddComponent<RuntimeAnimatorPlayer>();
+                animComponent.Initialize();
+            }
+
+            LoadBipedAnimations(animComponent, "mp");
+            ConfigureEnemyRuntime(enemyRoot, variant, level, "default");
+            return enemyRoot;
+        }
+
+        private GameObject SpawnLegacyCreature(string creatureName)
+        {
+            var variant = new PotcoEnemyVariantData
+            {
+                TypeName = creatureName,
+                Kind = PotcoEnemyKind.Creature,
+                CreatureSpecies = string.IsNullOrEmpty(creatureSpecies) ? creatureName : creatureSpecies,
+                CreatureModelPath = creatureModelPath,
+                BaseScale = 1f,
+                MinLevel = 1,
+                MaxLevel = 1,
+                Height = 1.5f,
+                BattleTubeRadius = 0.5f
+            };
+
+            return SpawnCreature(variant, 1);
+        }
+
+        private GameObject SpawnLegacyHumanEnemy(string enemyName)
+        {
+            var variant = new PotcoEnemyVariantData
+            {
+                TypeName = enemyName,
+                Kind = PotcoEnemyKind.Human,
+                HumanPreset = PotcoEnemyHumanPreset.None,
+                MinLevel = 1,
+                MaxLevel = 1,
+                Height = 1.8f,
+                BattleTubeRadius = 0.3f
+            };
+
+            return SpawnHumanEnemy(variant, 1);
+        }
+
+        private GameObject LoadCreaturePrefab(string modelPath)
+        {
+            if (string.IsNullOrEmpty(modelPath))
+                return null;
+
+            if (s_creaturePrefabCache.TryGetValue(modelPath, out GameObject cached))
+                return cached;
+
+            GameObject prefab = LoadModelWithPhaseFallback(modelPath, includeLodSuffixes: false);
+            s_creaturePrefabCache[modelPath] = prefab;
+            return prefab;
+        }
+
+        private GameObject LoadSkeletonPrefab(string modelPath)
+        {
+            return LoadModelWithPhaseFallback(modelPath, includeLodSuffixes: true);
+        }
+
+        private GameObject LoadModelWithPhaseFallback(string modelPath, bool includeLodSuffixes)
+        {
+            if (string.IsNullOrEmpty(modelPath))
+                return null;
+
+            string normalized = modelPath.Replace("\\", "/").Trim();
+            string[] phases = { "", "phase_2/", "phase_3/", "phase_4/", "phase_5/", "phase_6/" };
+            string[] suffixes = includeLodSuffixes
+                ? new[] { "", "_1000", "_2000", "_500", "_250" }
+                : new[] { "" };
+
+            foreach (string phase in phases)
+            {
+                foreach (string suffix in suffixes)
+                {
+                    GameObject prefab = Resources.Load<GameObject>(phase + normalized + suffix);
+                    if (prefab != null)
+                        return prefab;
+                }
+            }
+
+            return null;
+        }
+
+        private GameObject InstantiateModel(GameObject prefab, Transform parent)
+        {
+            GameObject instance = null;
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+                instance = UnityEditor.PrefabUtility.InstantiatePrefab(prefab, parent) as GameObject;
+#endif
+            if (instance == null)
+                instance = Instantiate(prefab, parent, false);
+
+            instance.transform.localPosition = Vector3.zero;
+            instance.transform.localRotation = Quaternion.identity;
+            instance.transform.localScale = Vector3.one;
+            return instance;
+        }
+
+        private GameObject CreateFallbackPrimitive(string name, PrimitiveType primitiveType, Transform parent)
+        {
+            GameObject fallback = GameObject.CreatePrimitive(primitiveType);
+            fallback.name = name;
+            fallback.transform.SetParent(parent, false);
+            fallback.transform.localPosition = Vector3.zero;
+            fallback.transform.localRotation = Quaternion.identity;
+            fallback.transform.localScale = Vector3.one;
+            return fallback;
+        }
+
+        private static void ApplyBipedVisualFacing(GameObject model)
+        {
+            if (model != null)
+                model.transform.localRotation = Quaternion.Euler(0f, PotcoBipedVisualYawOffset, 0f);
+        }
+
+        private static void DestroyImmediateSafe(GameObject go)
+        {
+            if (go == null)
+                return;
+
+            if (Application.isPlaying)
+                Destroy(go);
+            else
+                DestroyImmediate(go);
+        }
+
+        private void ConfigureEnemyRuntime(GameObject enemyRoot, PotcoEnemyVariantData variant, int level, string animSet)
+        {
+            if (enemyRoot == null || variant == null)
+                return;
+
+            float resolvedScale = variant.ResolveScale(level);
+            enemyRoot.transform.localScale = Vector3.one * Mathf.Max(0.01f, resolvedScale);
+
+            NPCData npcData = enemyRoot.GetComponent<NPCData>();
+            if (npcData == null)
+                npcData = enemyRoot.AddComponent<NPCData>();
+
+            npcData.npcId = $"{spawnables}_{variant.TypeName}_{enemyRoot.GetInstanceID()}";
+            npcData.category = variant.Kind == PotcoEnemyKind.Creature ? "Animal" : "Enemy";
+            npcData.team = string.IsNullOrEmpty(variant.Faction) ? GetTeamName(teamId) : variant.Faction;
+            npcData.startState = string.IsNullOrEmpty(startState) ? "LandRoam" : startState;
+            npcData.patrolRadius = patrolRadius;
+            npcData.aggroRadius = aggroRadius;
+            npcData.animSet = !string.IsNullOrEmpty(worldAnimSet)
+                ? worldAnimSet
+                : (string.IsNullOrEmpty(animSet) ? "default" : animSet);
+            npcData.greetingAnimation = worldGreetingAnimation;
+            npcData.noticeAnimation1 = worldNoticeAnimation1;
+            npcData.noticeAnimation2 = worldNoticeAnimation2;
+            npcData.isEnemy = true;
+            npcData.enemySpawnable = spawnables;
+            npcData.enemyTypeName = variant.TypeName;
+            npcData.enemyLevel = level;
+            npcData.enemyKind = variant.Kind;
+            npcData.enemyMonsterClass = variant.MonsterClass;
+            npcData.enemyFaction = variant.Faction;
+            npcData.enemyTrack = variant.Track;
+            npcData.enemyBipedAnimStyle = variant.Kind == PotcoEnemyKind.Human ? "mp" : (animSet ?? "");
+            npcData.enemyScale = resolvedScale;
+            npcData.enemyWeaponCategories = variant.WeaponCategories?.ToArray() ?? Array.Empty<string>();
+            npcData.enemyWeaponNames = variant.WeaponItemNames?.ToArray() ?? Array.Empty<string>();
+            npcData.enemyWeaponIds = variant.WeaponItemIds?.ToArray() ?? Array.Empty<int>();
+            npcData.enemySkillNames = variant.SkillNames?.ToArray() ?? Array.Empty<string>();
+            npcData.enemySkillIds = variant.SkillIds?.ToArray() ?? Array.Empty<int>();
+
+            CharacterController controller = enemyRoot.GetComponent<CharacterController>();
+            if (controller == null)
+                controller = enemyRoot.AddComponent<CharacterController>();
+
+            float height = Mathf.Max(1f, variant.Kind == PotcoEnemyKind.Human ? 1.8f : variant.Height);
+            float radius = Mathf.Clamp(variant.BattleTubeRadius * 0.5f, 0.25f, 2.5f);
+            controller.height = height;
+            controller.radius = radius;
+            controller.center = new Vector3(0f, height * 0.5f, 0f);
+
+            NPCController npcController = enemyRoot.GetComponent<NPCController>();
+            if (npcController == null)
+                npcController = enemyRoot.AddComponent<NPCController>();
+            EnablePatrol(npcController);
+            npcController.enabled = true;
+
+            if (variant.Kind != PotcoEnemyKind.Creature && enemyRoot.GetComponent<NPCAnimationPlayer>() == null)
+                enemyRoot.AddComponent<NPCAnimationPlayer>();
+
+            PotcoEnemyCombatLoadout loadout = enemyRoot.GetComponent<PotcoEnemyCombatLoadout>();
+            if (loadout == null)
+                loadout = enemyRoot.AddComponent<PotcoEnemyCombatLoadout>();
+            loadout.Initialize(variant, level);
+        }
+
+        private void EnablePatrol(NPCController npcController)
+        {
+            var enablePatrolField = typeof(NPCController).GetField("enablePatrol",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (enablePatrolField != null)
+                enablePatrolField.SetValue(npcController, true);
+        }
+
+        private void AddCreatureAnimationPlayer(GameObject model, string species)
+        {
+            if (model == null)
+                return;
+
+            AnimalAnimationPlayer animalAnimPlayer = model.GetComponent<AnimalAnimationPlayer>();
+            if (animalAnimPlayer == null)
+                animalAnimPlayer = model.AddComponent<AnimalAnimationPlayer>();
+
+            string animPrefix = (species ?? string.Empty).ToLowerInvariant();
+            animPrefix = System.Text.RegularExpressions.Regex.Replace(animPrefix, "_hi$|_lo$|_mid$", "");
+            animalAnimPlayer.animationPrefix = animPrefix;
+            animalAnimPlayer.currentState = string.IsNullOrEmpty(startState) ? "LandRoam" : startState;
+        }
+
+        private void LoadBipedAnimations(RuntimeAnimatorPlayer animComponent, string style)
+        {
+            if (animComponent == null)
+                return;
+
+            string[] names =
+            {
+                "idle",
+                "walk",
+                "run",
+                "intro",
+                "cutlass_combo",
+                "dagger_combo",
+                "gun_fire",
+                "rifle_fight_shoot_hip",
+                "bayonet_attackA",
+                "knife_throw",
+                "bomb_throw",
+                "voodoo_tune",
+                "voodoo_doll_poke",
+                "wand_cast_fire"
+            };
+            foreach (string name in names)
+            {
+                foreach (string candidate in PotcoBipedAnimationResolver.BuildResourceCandidates(name, style))
+                {
+                    AnimationClip clip = Resources.Load<AnimationClip>(candidate);
+                    if (clip == null)
+                        continue;
+
+                    animComponent.AddClip(clip, name);
+                    animComponent.SetWrapMode(name, WrapMode.Loop);
+                    break;
+                }
+            }
         }
 
         // Static caches to prevent redundant Resources.Load calls across multiple SpawnNodes

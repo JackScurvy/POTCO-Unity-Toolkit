@@ -18,6 +18,23 @@ namespace POTCO
         public float patrolRadius = 12f;         // Patrol Radius
         public float aggroRadius = 0f;           // Aggro Radius (0 = non-combat NPC)
 
+        [Header("POTCO Enemy")]
+        public bool isEnemy = false;
+        public string enemySpawnable = "";
+        public string enemyTypeName = "";
+        public int enemyLevel = 1;
+        public PotcoEnemyKind enemyKind = PotcoEnemyKind.Unknown;
+        public PotcoEnemyMonsterClass enemyMonsterClass = PotcoEnemyMonsterClass.Unknown;
+        public string enemyFaction = "";
+        public string enemyTrack = "";
+        public string enemyBipedAnimStyle = "";
+        public float enemyScale = 1f;
+        public string[] enemyWeaponCategories = System.Array.Empty<string>();
+        public string[] enemyWeaponNames = System.Array.Empty<string>();
+        public int[] enemyWeaponIds = System.Array.Empty<int>();
+        public string[] enemySkillNames = System.Array.Empty<string>();
+        public int[] enemySkillIds = System.Array.Empty<int>();
+
         [Header("Animations")]
         public string animSet = "default";       // Animation set
         public string greetingAnimation = "";    // Greeting Animation

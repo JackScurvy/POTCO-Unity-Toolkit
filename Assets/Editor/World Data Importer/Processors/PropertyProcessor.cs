@@ -592,13 +592,20 @@ namespace WorldDataImporter.Processors
                     }
                     break;
                 case "AnimSet":
-                    // Store animation set for NPCs
-                    if (objectData != null && settings?.importNPCs == true)
+                    // Store animation set for NPCs and enemy spawn nodes.
+                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Spawn Node"))
                     {
                         string animSet = ParsingUtilities.ExtractStringValue(val);
                         objectData.npcAnimSet = animSet;
-                        objectData.isReadyForNPCSpawn = true; // Mark as ready for spawning
-                        DebugLogger.LogNPCImport($"🎬 Stored NPC AnimSet: {animSet}");
+                        if (objectData.objectType == "Spawn Node")
+                        {
+                            DebugLogger.LogWorldImporter($"🎬 Stored Spawn Node AnimSet: {animSet}");
+                        }
+                        else
+                        {
+                            objectData.isReadyForNPCSpawn = true; // Mark as ready for spawning
+                            DebugLogger.LogNPCImport($"🎬 Stored NPC AnimSet: {animSet}");
+                        }
                     }
                     break;
                 case "Category":
@@ -611,30 +618,39 @@ namespace WorldDataImporter.Processors
                     }
                     break;
                 case "Greeting Animation":
-                    // Store greeting animation
-                    if (objectData != null && settings?.importNPCs == true)
+                    // Store greeting animation for NPCs and enemy spawn nodes.
+                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Spawn Node"))
                     {
                         string greetingAnim = ParsingUtilities.ExtractStringValue(val);
                         objectData.npcGreetingAnim = greetingAnim;
-                        DebugLogger.LogNPCImport($"👋 Stored NPC Greeting Animation: {greetingAnim}");
+                        if (objectData.objectType == "Spawn Node")
+                            DebugLogger.LogWorldImporter($"👋 Stored Spawn Node Greeting Animation: {greetingAnim}");
+                        else
+                            DebugLogger.LogNPCImport($"👋 Stored NPC Greeting Animation: {greetingAnim}");
                     }
                     break;
                 case "Notice Animation 1":
-                    // Store notice animation 1
-                    if (objectData != null && settings?.importNPCs == true)
+                    // Store notice animation 1 for NPCs and enemy spawn nodes.
+                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Spawn Node"))
                     {
                         string noticeAnim1 = ParsingUtilities.ExtractStringValue(val);
                         objectData.npcNoticeAnim1 = noticeAnim1;
-                        DebugLogger.LogNPCImport($"👀 Stored NPC Notice Animation 1: {noticeAnim1}");
+                        if (objectData.objectType == "Spawn Node")
+                            DebugLogger.LogWorldImporter($"👀 Stored Spawn Node Notice Animation 1: {noticeAnim1}");
+                        else
+                            DebugLogger.LogNPCImport($"👀 Stored NPC Notice Animation 1: {noticeAnim1}");
                     }
                     break;
                 case "Notice Animation 2":
-                    // Store notice animation 2
-                    if (objectData != null && settings?.importNPCs == true)
+                    // Store notice animation 2 for NPCs and enemy spawn nodes.
+                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Spawn Node"))
                     {
                         string noticeAnim2 = ParsingUtilities.ExtractStringValue(val);
                         objectData.npcNoticeAnim2 = noticeAnim2;
-                        DebugLogger.LogNPCImport($"👀 Stored NPC Notice Animation 2: {noticeAnim2}");
+                        if (objectData.objectType == "Spawn Node")
+                            DebugLogger.LogWorldImporter($"👀 Stored Spawn Node Notice Animation 2: {noticeAnim2}");
+                        else
+                            DebugLogger.LogNPCImport($"👀 Stored NPC Notice Animation 2: {noticeAnim2}");
                     }
                     break;
                 case "Species":
@@ -1683,6 +1699,22 @@ namespace WorldDataImporter.Processors
                 spawnNode.startState = objectData.startState ?? "Idle";
                 spawnNode.spawnTimeBegin = objectData.spawnTimeBegin ?? 0f;
                 spawnNode.spawnTimeEnd = objectData.spawnTimeEnd ?? 0f;
+                spawnNode.SetWorldAnimationData(
+                    objectData.npcAnimSet,
+                    objectData.npcGreetingAnim,
+                    objectData.npcNoticeAnim1,
+                    objectData.npcNoticeAnim2);
+
+                try
+                {
+                    PotcoEnemySpawnDefinition resolvedEnemyDefinition = PotcoEnemySourceParser.LoadFromProjectSource().ResolveSpawnable(objectData.spawnables);
+                    spawnNode.SetEnemyDefinition(resolvedEnemyDefinition);
+                    DebugLogger.LogWorldImporter($"   -> Resolved POTCO spawnable '{objectData.spawnables}' to {resolvedEnemyDefinition.Variants.Count} variant(s)");
+                }
+                catch (System.Exception parserEx)
+                {
+                    DebugLogger.LogWorldImporter($"   -> POTCO enemy parser unavailable for '{objectData.spawnables}': {parserEx.Message}");
+                }
 
                 // Determine if this is a creature type (uses dynamic parser)
                 bool isCreature = WorldDataImporter.Utilities.EnemyDataParser.IsCreatureType(objectData.spawnables);
