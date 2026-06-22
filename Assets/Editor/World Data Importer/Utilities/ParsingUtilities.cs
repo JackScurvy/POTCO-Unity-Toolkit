@@ -6,7 +6,7 @@ namespace WorldDataImporter.Utilities
     public static class ParsingUtilities
     {
         private static readonly Regex objIdRegex = new(@"^\s*'(\d+\.\d+\w*)':\s*{");
-        private static readonly Regex propRegex = new(@"^\s*'(\w+)':\s*(.*)");
+        private static readonly Regex propRegex = new(@"^\s*'([^']+)':\s*(.*)");
         private static readonly Regex modelPathRegex = new(@"'([^']+)'");
         private static readonly Regex colorRegex = new(@"\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)");
         private static readonly Regex boolRegex = new(@"(True|False)");

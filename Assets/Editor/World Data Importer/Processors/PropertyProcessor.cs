@@ -80,7 +80,7 @@ namespace WorldDataImporter.Processors
                     break;
                 case "GridPos":
                     // Store GridPos for NPCs (always world position)
-                    if (objectData != null && settings?.importNPCs == true)
+                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Townsperson"))
                     {
                         objectData.gridPos = ParsingUtilities.ParseVector3(val);
                         DebugLogger.LogNPCImport($"📍 Stored GridPos: {objectData.gridPos}");
@@ -147,6 +147,11 @@ namespace WorldDataImporter.Processors
                         if (objectData != null)
                         {
                             objectData.objectType = objectType;
+                            if (IsRuntimeEnemyObjectType(objectType))
+                            {
+                                objectData.isReadyForEnemySpawn = true;
+                                DebugLogger.LogWorldImporter($"Marked direct POTCO enemy for spawn routing: {objectData.id} ({objectType})");
+                            }
 
                             // For Townsperson, use object ID as DNA ID if no DNA property exists
                             if (objectType == "Townsperson" && settings?.importNPCs == true)
@@ -579,6 +584,44 @@ namespace WorldDataImporter.Processors
                         DebugLogger.LogNPCImport($"👤 Stored NPC DNA ID: {dnaId} (overriding object ID)");
                     }
                     break;
+                case "Boss":
+                    if (objectData != null && ParsingUtilities.ParseBool(val, out bool boss))
+                    {
+                        objectData.isBoss = boss;
+                        if (boss && objectData.objectType == "Townsperson")
+                            objectData.isReadyForEnemySpawn = true;
+                    }
+                    break;
+                case "Boss Name":
+                    if (objectData != null)
+                    {
+                        objectData.bossName = ParsingUtilities.ExtractStringValue(val);
+                    }
+                    break;
+                case "Level":
+                    if (objectData != null && int.TryParse(ParsingUtilities.ExtractStringValue(val), out int level))
+                    {
+                        objectData.enemyLevel = level;
+                    }
+                    break;
+                case "AvTrack":
+                    if (objectData != null && int.TryParse(ParsingUtilities.ExtractStringValue(val), out int avTrack))
+                    {
+                        objectData.avatarTrack = avTrack;
+                    }
+                    break;
+                case "AvId":
+                    if (objectData != null && int.TryParse(ParsingUtilities.ExtractStringValue(val), out int avId))
+                    {
+                        objectData.avatarId = avId;
+                    }
+                    break;
+                case "NavyFaction":
+                    if (objectData != null)
+                    {
+                        objectData.navyFaction = ParsingUtilities.ExtractStringValue(val);
+                    }
+                    break;
                 case "CustomModel":
                     // Store custom model path for NPCs (ignore "None")
                     if (objectData != null && settings?.importNPCs == true)
@@ -593,7 +636,7 @@ namespace WorldDataImporter.Processors
                     break;
                 case "AnimSet":
                     // Store animation set for NPCs and enemy spawn nodes.
-                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Spawn Node"))
+                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Townsperson" || objectData.objectType == "Spawn Node" || IsRuntimeEnemyObjectType(objectData.objectType) || IsBossTownsperson(objectData)))
                     {
                         string animSet = ParsingUtilities.ExtractStringValue(val);
                         objectData.npcAnimSet = animSet;
@@ -619,7 +662,7 @@ namespace WorldDataImporter.Processors
                     break;
                 case "Greeting Animation":
                     // Store greeting animation for NPCs and enemy spawn nodes.
-                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Spawn Node"))
+                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Townsperson" || objectData.objectType == "Spawn Node" || IsRuntimeEnemyObjectType(objectData.objectType) || IsBossTownsperson(objectData)))
                     {
                         string greetingAnim = ParsingUtilities.ExtractStringValue(val);
                         objectData.npcGreetingAnim = greetingAnim;
@@ -631,7 +674,7 @@ namespace WorldDataImporter.Processors
                     break;
                 case "Notice Animation 1":
                     // Store notice animation 1 for NPCs and enemy spawn nodes.
-                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Spawn Node"))
+                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Townsperson" || objectData.objectType == "Spawn Node" || IsRuntimeEnemyObjectType(objectData.objectType) || IsBossTownsperson(objectData)))
                     {
                         string noticeAnim1 = ParsingUtilities.ExtractStringValue(val);
                         objectData.npcNoticeAnim1 = noticeAnim1;
@@ -643,7 +686,7 @@ namespace WorldDataImporter.Processors
                     break;
                 case "Notice Animation 2":
                     // Store notice animation 2 for NPCs and enemy spawn nodes.
-                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Spawn Node"))
+                    if (objectData != null && (settings?.importNPCs == true || objectData.objectType == "Townsperson" || objectData.objectType == "Spawn Node" || IsRuntimeEnemyObjectType(objectData.objectType) || IsBossTownsperson(objectData)))
                     {
                         string noticeAnim2 = ParsingUtilities.ExtractStringValue(val);
                         objectData.npcNoticeAnim2 = noticeAnim2;
@@ -655,11 +698,14 @@ namespace WorldDataImporter.Processors
                     break;
                 case "Species":
                     // Store species for Animals
-                    if (objectData != null && objectData.objectType == "Animal")
+                    if (objectData != null && (objectData.objectType == "Animal" || objectData.objectType == "Creature"))
                     {
                         string species = ParsingUtilities.ExtractStringValue(val);
                         objectData.species = species;
-                        objectData.isReadyForCreatureSpawn = true;
+                        if (objectData.objectType == "Animal")
+                            objectData.isReadyForCreatureSpawn = true;
+                        else
+                            objectData.isReadyForEnemySpawn = true;
                         DebugLogger.LogWorldImporter($"🐾 Stored Animal Species: {species}");
                     }
                     break;
@@ -711,7 +757,7 @@ namespace WorldDataImporter.Processors
                     case "Patrol Radius":
                         if (float.TryParse(ParsingUtilities.ExtractStringValue(val), out float patrolRad))
                         {
-                            if (objectData.objectType == "Animal" || objectData.objectType == "Spawn Node")
+                            if (objectData.objectType == "Animal" || objectData.objectType == "Spawn Node" || IsRuntimeEnemyObjectType(objectData.objectType) || IsBossTownsperson(objectData))
                             {
                                 objectData.patrolRadius = patrolRad;
                                 DebugLogger.LogWorldImporter($"🚶 Stored Patrol Radius: {patrolRad}");
@@ -726,7 +772,7 @@ namespace WorldDataImporter.Processors
                     case "Aggro Radius":
                         if (float.TryParse(ParsingUtilities.ExtractStringValue(val), out float aggroRad))
                         {
-                            if (objectData.objectType == "Spawn Node")
+                            if (objectData.objectType == "Spawn Node" || IsRuntimeEnemyObjectType(objectData.objectType) || IsBossTownsperson(objectData))
                             {
                                 objectData.aggroRadius = aggroRad;
                                 DebugLogger.LogWorldImporter($"⚔️ Stored Aggro Radius: {aggroRad}");
@@ -740,7 +786,7 @@ namespace WorldDataImporter.Processors
                         break;
                     case "Start State":
                         string startStateVal = ParsingUtilities.ExtractStringValue(val);
-                        if (objectData.objectType == "Animal" || objectData.objectType == "Spawn Node")
+                        if (objectData.objectType == "Animal" || objectData.objectType == "Spawn Node" || IsRuntimeEnemyObjectType(objectData.objectType) || IsBossTownsperson(objectData))
                         {
                             objectData.startState = startStateVal;
                             DebugLogger.LogWorldImporter($"🎬 Stored Start State: {startStateVal}");
@@ -753,7 +799,7 @@ namespace WorldDataImporter.Processors
                         break;
                     case "Team":
                         string teamVal = ParsingUtilities.ExtractStringValue(val);
-                        if (objectData.objectType == "Spawn Node")
+                        if (objectData.objectType == "Spawn Node" || IsRuntimeEnemyObjectType(objectData.objectType) || IsBossTownsperson(objectData))
                         {
                             objectData.team = teamVal;
                             DebugLogger.LogWorldImporter($"👥 Stored Team: {teamVal}");
@@ -770,6 +816,125 @@ namespace WorldDataImporter.Processors
             // Note: NPC spawning is now handled after all properties are processed
             // (moved to SceneBuildingAlgorithm when object is complete)
         }
+
+        private static bool IsRuntimeEnemyObjectType(string objectType)
+        {
+            switch (objectType)
+            {
+                case "Creature":
+                case "Skeleton":
+                case "NavySailor":
+                case "Ghost":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsBossTownsperson(ObjectData objectData)
+        {
+            return objectData != null &&
+                   objectData.isBoss &&
+                   objectData.objectType == "Townsperson";
+        }
+
+        private static string ResolveDirectEnemySpawnable(ObjectData objectData)
+        {
+            if (objectData == null)
+                return string.Empty;
+
+            switch (objectData.objectType)
+            {
+                case "Creature":
+                    return objectData.species ?? string.Empty;
+                case "Skeleton":
+                    return ResolveAvatarSpawnable(SkeletonAvatarNames, objectData.avatarTrack, objectData.avatarId);
+                case "Ghost":
+                    return ResolveAvatarSpawnable(GhostAvatarNames, objectData.avatarTrack, objectData.avatarId);
+                case "NavySailor":
+                    return ResolveNavySailorSpawnable(objectData);
+                case "Townsperson" when objectData.isBoss:
+                    return ResolveTownspersonBossSpawnable(objectData);
+                default:
+                    return string.Empty;
+            }
+        }
+
+        private static string ResolveNavySailorSpawnable(ObjectData objectData)
+        {
+            if (objectData == null)
+                return string.Empty;
+
+            string faction = objectData.navyFaction ?? string.Empty;
+            if (faction == "TradingCo")
+                return ResolveAvatarSpawnable(TradingCompanyAvatarNames, objectData.avatarTrack, objectData.avatarId);
+
+            // World-data NavySailor entries use AvTrack 0 for the combat sailor set used by enemy globals.
+            int track = objectData.avatarTrack ?? 0;
+            if (track == 0)
+                return ResolveAvatarSpawnable(new[] { NavyMarksmen }, 0, objectData.avatarId);
+
+            return ResolveAvatarSpawnable(NavyAvatarNames, objectData.avatarTrack, objectData.avatarId);
+        }
+
+        private static string ResolveTownspersonBossSpawnable(ObjectData objectData)
+        {
+            if (!string.IsNullOrWhiteSpace(objectData.npcCategory) &&
+                !string.Equals(objectData.npcCategory, "Commoner", System.StringComparison.OrdinalIgnoreCase))
+            {
+                return "Avatar - " + objectData.npcCategory;
+            }
+
+            return "Avatar - Kudgel";
+        }
+
+        private static string ResolveAvatarSpawnable(string[][] groups, int? track, int? id)
+        {
+            int trackIndex = Mathf.Max(0, track ?? 0);
+            int idIndex = Mathf.Max(0, id ?? 0);
+            if (groups == null || trackIndex >= groups.Length || groups[trackIndex] == null || idIndex >= groups[trackIndex].Length)
+                return string.Empty;
+
+            return "Avatar - " + groups[trackIndex][idIndex];
+        }
+
+        private static readonly string[][] SkeletonAvatarNames =
+        {
+            new[] { "Clod", "Sludge", "Mire", "MireKnife", "Muck", "MuckCutlass", "Corpse", "CorpseCutlass", "Carrion", "CarrionKnife", "Cadaver", "CadaverCutlass", "Zombie", "CaptMudmoss", "Mossman" },
+            new[] { "Whiff", "Reek", "Billow", "Stench", "Shade", "Specter", "Phantom", "Wraith", "CaptZephyr", "Squall" },
+            new[] { "Glint", "Flicker", "Smolder", "Spark", "Imp", "Brand", "Lumen", "Fiend", "CaptCinderbones", "Torch" },
+            new[] { "Drip", "Damp", "Drizzle", "Spray", "Splatter", "Drool", "Drench", "Douse", "CaptBriney", "Spout" },
+            null,
+            new[] { "JollyRoger" },
+            new[] { "FrenchUndeadA", "FrenchUndeadB", "FrenchUndeadC", "FrenchUndeadD", "FrenchBoss" },
+            new[] { "SpanishUndeadA", "SpanishUndeadB", "SpanishUndeadC", "SpanishUndeadD", "SpanishBoss" },
+            new[] { "BomberZombie" }
+        };
+
+        private static readonly string[] NavyMarksmen =
+        {
+            "Cadet", "Guard", "Marine", "Sergeant", "Veteran", "Officer", "Dragoon"
+        };
+
+        private static readonly string[][] NavyAvatarNames =
+        {
+            NavyMarksmen,
+            NavyMarksmen,
+            new[] { "FirstMate", "Captain", "Lieutenant", "Admiral", "Commodore" }
+        };
+
+        private static readonly string[][] TradingCompanyAvatarNames =
+        {
+            new[] { "Thug", "Grunt", "Hiredgun", "Mercenary", "Assassin" },
+            new[] { "Rogue", "Stalker", "Cutthroat", "Executioner", "Professional" },
+            new[] { "OffA", "OffB", "OffC", "OffD", "Viceroy" }
+        };
+
+        private static readonly string[][] GhostAvatarNames =
+        {
+            new[] { "Revenant", "MutineerGhost", "DeviousGhost", "TraitorGhost", "CrewGhost", "LeaderGhost" },
+            new[] { "RageGhost" }
+        };
 
         private static bool IsIslandModelPath(string modelPath)
         {
@@ -847,6 +1012,12 @@ namespace WorldDataImporter.Processors
         {
             try
             {
+                if (IsBossTownsperson(objectData))
+                {
+                    SpawnEnemy(currentGO, objectData, stats);
+                    return;
+                }
+
                 // Determine if using DNA or CustomModel
                 // Note: Object ID is used as DNA ID when no DNA property exists (set in Type case)
                 bool useDNA = !string.IsNullOrEmpty(objectData.npcDnaId);
@@ -1657,6 +1828,12 @@ namespace WorldDataImporter.Processors
         {
             try
             {
+                if (currentGO != null && currentGO.GetComponent<SpawnNode>() != null)
+                    return;
+
+                if (objectData != null && string.IsNullOrEmpty(objectData.spawnables))
+                    objectData.spawnables = ResolveDirectEnemySpawnable(objectData);
+
                 if (string.IsNullOrEmpty(objectData.spawnables))
                 {
                     DebugLogger.LogWorldImporter($"❌ Cannot spawn enemy node - no spawnables defined for {objectData.id}");
@@ -1707,7 +1884,26 @@ namespace WorldDataImporter.Processors
 
                 try
                 {
-                    PotcoEnemySpawnDefinition resolvedEnemyDefinition = PotcoEnemySourceParser.LoadFromProjectSource().ResolveSpawnable(objectData.spawnables);
+                    PotcoEnemySourceIndex sourceIndex = PotcoEnemySourceParser.LoadFromProjectSource();
+                    if (objectData.isBoss)
+                    {
+                        PotcoBossData bossData = sourceIndex.ResolveBossData(objectData.id);
+                        if (objectData.enemyLevel.HasValue)
+                            bossData.LevelOverride = objectData.enemyLevel.Value;
+                        if (!string.IsNullOrWhiteSpace(objectData.bossName) &&
+                            !string.Equals(objectData.bossName, "Anonymous", System.StringComparison.OrdinalIgnoreCase))
+                        {
+                            bossData.DisplayName = objectData.bossName;
+                        }
+
+                        spawnNode.SetWorldBossData(true, objectData.id, bossData);
+                    }
+                    else if (objectData.enemyLevel.HasValue)
+                    {
+                        spawnNode.SetWorldLevelOverride(objectData.enemyLevel.Value);
+                    }
+
+                    PotcoEnemySpawnDefinition resolvedEnemyDefinition = sourceIndex.ResolveSpawnable(objectData.spawnables);
                     spawnNode.SetEnemyDefinition(resolvedEnemyDefinition);
                     DebugLogger.LogWorldImporter($"   -> Resolved POTCO spawnable '{objectData.spawnables}' to {resolvedEnemyDefinition.Variants.Count} variant(s)");
                 }
@@ -1749,11 +1945,13 @@ namespace WorldDataImporter.Processors
                     { "Player", 1 },
                     { "Navy", 2 },
                     { "EvilNavy", 3 },
+                    { "TradingCo", 3 },
+                    { "EITC", 3 },
                     { "Undead", 4 },
                     // TODO: Add more team mappings as needed
                 };
 
-                string teamName = objectData.team ?? "default";
+                string teamName = objectData.team ?? objectData.navyFaction ?? "default";
                 if (teamNameToId.TryGetValue(teamName, out int teamId))
                 {
                     spawnNode.teamId = teamId;

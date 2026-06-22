@@ -45,6 +45,8 @@ namespace WorldDataImporter.Utilities
             string enemyGlobalsPath = Path.Combine(sourceRoot, "battle", "EnemyGlobals.py");
             string enemySkillsPath = Path.Combine(sourceRoot, "battle", "EnemySkills.py");
             string skeletonPath = Path.Combine(sourceRoot, "npc", "Skeleton.py");
+            string bossNpcListPath = Path.Combine(sourceRoot, "npc", "BossNPCList.py");
+            string localizerPath = Path.Combine(sourceRoot, "PLocalizerEnglish.py");
             string uberDogPath = Path.Combine(sourceRoot, "uberdog", "UberDogGlobals.py");
             string itemDataPath = Path.Combine(sourceRoot, "inventory", "ItemData.py");
 
@@ -57,8 +59,13 @@ namespace WorldDataImporter.Utilities
             string enemyGlobals = File.ReadAllText(enemyGlobalsPath);
             string enemySkills = File.Exists(enemySkillsPath) ? File.ReadAllText(enemySkillsPath) : string.Empty;
             string skeleton = File.Exists(skeletonPath) ? File.ReadAllText(skeletonPath) : string.Empty;
+            string localizer = File.Exists(localizerPath) ? File.ReadAllText(localizerPath) : string.Empty;
+            string bossNpcList = File.Exists(bossNpcListPath) ? File.ReadAllText(bossNpcListPath) : string.Empty;
 
-            Dictionary<string, AvatarMeta> avatarMeta = ParseAvatarTypes(avatarTypes);
+            BossNameCursor localizedBossNames = ParseLocalizedBossNames(localizer);
+            Dictionary<string, string> uniqueBossNames = ParseBossNpcNames(localizer);
+            Dictionary<string, PotcoBossData> bossDataById = ParseBossData(bossNpcList, uniqueBossNames, out PotcoBossData defaultBossData);
+            Dictionary<string, AvatarMeta> avatarMeta = ParseAvatarTypes(avatarTypes, localizedBossNames);
             Dictionary<string, EnemyStats> stats = ParseEnemyStats(enemyGlobals);
             Dictionary<int, LevelMultiplier> levelMultipliers = ParseLevelMultipliers(enemyGlobals);
             Dictionary<string, List<string>> enemyWeaponTable = ParseEnemyWeaponTable(enemyGlobals);
@@ -73,8 +80,13 @@ namespace WorldDataImporter.Utilities
             SkeletonStyleIndex skeletonStyles = ParseSkeletonStyles(skeleton);
 
             var index = new PotcoEnemySourceIndex();
+            index.SetDefaultBossData(defaultBossData);
+            foreach (PotcoBossData bossData in bossDataById.Values)
+                index.AddBossData(bossData);
+
             Dictionary<string, List<string>> spawnableMap = ParseSpawnables(avatarTypes, avatarMeta);
             AddEditorSpawnables(spawnableMap, avatarMeta);
+            AddAvatarTypeSpawnables(spawnableMap, avatarMeta);
 
             foreach (KeyValuePair<string, List<string>> entry in spawnableMap)
             {
@@ -110,8 +122,10 @@ namespace WorldDataImporter.Utilities
             IReadOnlyDictionary<string, SkillLoadout> skillLoadouts,
             SkeletonStyleIndex skeletonStyles)
         {
-            string canonicalType = ResolveTypeAlias(typeName);
-            avatarMeta.TryGetValue(canonicalType, out AvatarMeta meta);
+            avatarMeta.TryGetValue(typeName, out AvatarMeta meta);
+            string canonicalType = ResolveTypeAlias(typeName, meta, stats, skillLoadouts);
+            if (meta == null)
+                avatarMeta.TryGetValue(canonicalType, out meta);
             stats.TryGetValue(canonicalType, out EnemyStats stat);
             skillLoadouts.TryGetValue(canonicalType, out SkillLoadout loadout);
 
@@ -129,13 +143,33 @@ namespace WorldDataImporter.Utilities
                 BaseScale = stat?.BaseScale ?? 1f,
                 Height = stat?.Height ?? (kind == PotcoEnemyKind.Human ? 1.8f : 1f),
                 BattleTubeRadius = stat?.BattleTubeRadius ?? 0.5f,
-                Enabled = stat == null || stat.Enabled
+                Enabled = (stat == null || stat.Enabled) || (meta != null && meta.IsBoss)
             };
+
+            if (meta != null && meta.IsBoss)
+            {
+                variant.IsBoss = true;
+                var bossData = new PotcoBossData
+                {
+                    DisplayName = string.IsNullOrEmpty(meta.BossName) ? typeName : meta.BossName
+                };
+                variant.BossData = bossData;
+            }
 
             if (kind == PotcoEnemyKind.Creature)
             {
                 variant.CreatureSpecies = ResolveCreatureSpecies(canonicalType, meta);
-                variant.CreatureModelPath = ResolveCreatureModelPath(variant.CreatureSpecies);
+                CreatureData creatureData = CreatureDataParser.GetCreatureData(variant.CreatureSpecies);
+                variant.CreatureModelPath = ResolveCreatureModelPath(variant.CreatureSpecies, creatureData);
+                variant.CreatureAnimationPrefix = PotcoCreatureAnimationCatalog.ResolveAnimationPrefix(
+                    variant.CreatureSpecies,
+                    variant.CreatureModelPath);
+
+                if (creatureData != null)
+                {
+                    variant.CreatureAnimationNames = creatureData.animations.Keys.ToList();
+                    variant.CreatureAnimationFiles = creatureData.animations.Values.ToList();
+                }
             }
 
             if (kind == PotcoEnemyKind.Skeleton)
@@ -269,32 +303,79 @@ namespace WorldDataImporter.Utilities
             return itemConstants.TryGetValue(shortName, out id) || inventoryTypeConstants.TryGetValue(shortName, out id);
         }
 
-        private static Dictionary<string, AvatarMeta> ParseAvatarTypes(string source)
+        private static Dictionary<string, AvatarMeta> ParseAvatarTypes(
+            string source,
+            BossNameCursor localizedBossNames)
         {
             var result = new Dictionary<string, AvatarMeta>(StringComparer.Ordinal);
 
+            var trackAliases = new Regex(
+                @"(?m)^(?<group>\w+Tracks)\s*=\s*\[AvatarType\(base=(?<base>\w+),\s*track=x\)\s+for\s+x\s+in\s+xrange\((?<count>\d+)\)\]\s*\r?\n(?<names>[A-Za-z0-9_, ]+?)\s*=\s*\k<group>");
+            foreach (Match match in trackAliases.Matches(source))
+                AddTrackAliases(result, match.Groups["base"].Value, SplitNames(match.Groups["names"].Value));
+
             var ranged = new Regex(
-                @"(?m)^(?<group>\w+)\s*=\s*\[AvatarType\(base=(?<base>\w+),\s*id=x\)\s+for\s+x\s+in\s+xrange\((?<count>\d+)\)\]\s*\r?\n(?<names>[A-Za-z0-9_,\s]+?)\s*=\s*\k<group>");
+                @"(?m)^(?<group>\w+)\s*=\s*\[AvatarType\(base=(?<base>\w+),\s*id=x\)\s+for\s+x\s+in\s+xrange\((?<count>\d+)\)\]\s*\r?\n(?<names>[A-Za-z0-9_, ]+?)\s*=\s*\k<group>");
             foreach (Match match in ranged.Matches(source))
                 AddAvatarGroup(result, match.Groups["group"].Value, SplitNames(match.Groups["names"].Value), 0);
 
             var single = new Regex(
-                @"(?m)^(?<group>\w+)\s*=\s*\[AvatarType\(base=(?<base>\w+),\s*id=(?<id>\d+)\)\]\s*\r?\n(?<names>[A-Za-z0-9_,\s]+?)\s*=\s*\k<group>");
+                @"(?m)^(?<group>\w+)\s*=\s*\[AvatarType\(base=(?<base>\w+),\s*id=(?<id>\d+)\)\]\s*\r?\n(?<names>[A-Za-z0-9_, ]+?)\s*=\s*\k<group>");
             foreach (Match match in single.Matches(source))
             {
                 int startIndex = int.TryParse(match.Groups["id"].Value, out int parsed) ? parsed : 0;
                 AddAvatarGroup(result, match.Groups["group"].Value, SplitNames(match.Groups["names"].Value), startIndex);
             }
 
-            AddAlias(result, "LaSchafe", "VoodooZombieBoss");
-            AddAlias(result, "FrenchBossA", "FrenchBoss");
-            AddAlias(result, "SpanishBossA", "SpanishBoss");
+            var bossGroupBase = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string line in Regex.Split(source ?? string.Empty, @"\r?\n"))
+            {
+                string trimmed = line.Trim();
+                Match bossGroup = Regex.Match(trimmed,
+                    @"^(?<group>\w+Bosses)\s*=\s*\[AvatarType\(base=(?<base>\w+),\s*boss=(?:x|\d+)\)");
+                if (bossGroup.Success)
+                {
+                    bossGroupBase[bossGroup.Groups["group"].Value] = bossGroup.Groups["base"].Value;
+                    continue;
+                }
+
+                Match bossAliases = Regex.Match(trimmed,
+                    @"^(?<names>[A-Za-z0-9_, ]+?)\s*=\s*(?<group>\w+Bosses)(?:\[(?<index>\d+)\])?$");
+                if (bossAliases.Success &&
+                    bossGroupBase.TryGetValue(bossAliases.Groups["group"].Value, out string baseName))
+                {
+                    AddBossAvatarGroup(result, baseName, SplitNames(bossAliases.Groups["names"].Value), localizedBossNames);
+                }
+            }
+
             return result;
+        }
+
+        private static void AddTrackAliases(Dictionary<string, AvatarMeta> result, string baseName, List<string> names)
+        {
+            ResolveFactionInfo(baseName, out string faction, out int factionId);
+            for (int i = 0; i < names.Count; i++)
+            {
+                string name = names[i];
+                if (result.ContainsKey(name))
+                    continue;
+
+                result[name] = new AvatarMeta
+                {
+                    Name = name,
+                    Group = name,
+                    Index = 0,
+                    Faction = faction,
+                    Track = name,
+                    FactionId = factionId,
+                    TrackId = i
+                };
+            }
         }
 
         private static void AddAvatarGroup(Dictionary<string, AvatarMeta> result, string group, List<string> names, int startIndex)
         {
-            ResolveGroupInfo(group, out string faction, out string track);
+            ResolveGroupInfo(group, out string faction, out string track, out int factionId, out int trackId);
             for (int i = 0; i < names.Count; i++)
             {
                 string name = names[i];
@@ -304,71 +385,132 @@ namespace WorldDataImporter.Utilities
                     Group = group,
                     Index = startIndex + i,
                     Faction = faction,
-                    Track = track
+                    Track = track,
+                    FactionId = factionId,
+                    TrackId = trackId
                 };
             }
         }
 
-        private static void AddAlias(Dictionary<string, AvatarMeta> result, string alias, string canonical)
+        private static void AddBossAvatarGroup(
+            Dictionary<string, AvatarMeta> result,
+            string baseName,
+            List<string> names,
+            BossNameCursor localizedBossNames)
         {
-            if (result.ContainsKey(alias) || !result.TryGetValue(canonical, out AvatarMeta meta))
-                return;
+            if (!result.TryGetValue(baseName, out AvatarMeta baseMeta))
+                baseMeta = CreateFallbackBaseMeta(baseName);
 
-            result[alias] = new AvatarMeta
+            List<string> bossNames = localizedBossNames?.TakeNames(baseMeta.FactionId, baseMeta.TrackId, names.Count)
+                ?? new List<string>();
+            for (int i = 0; i < names.Count; i++)
             {
-                Name = alias,
-                Group = meta.Group,
-                Index = meta.Index,
-                Faction = meta.Faction,
-                Track = meta.Track
-            };
+                string alias = names[i];
+                string bossName = i < bossNames.Count ? bossNames[i] : string.Empty;
+
+                result[alias] = new AvatarMeta
+                {
+                    Name = alias,
+                    Group = baseMeta.Group,
+                    Index = baseMeta.Index,
+                    Faction = baseMeta.Faction,
+                    Track = baseMeta.Track,
+                    FactionId = baseMeta.FactionId,
+                    TrackId = baseMeta.TrackId,
+                    IsBoss = true,
+                    BossBaseName = baseName,
+                    BossIndex = i,
+                    BossName = string.IsNullOrEmpty(bossName) ? alias : bossName
+                };
+            }
         }
 
-        private static void ResolveGroupInfo(string group, out string faction, out string track)
+        private static AvatarMeta CreateFallbackBaseMeta(string baseName)
         {
+            switch (baseName)
+            {
+                case "Cast":
+                    return new AvatarMeta { Name = baseName, Group = "Cast", Index = 0, Faction = "Townfolk", Track = "Cast", FactionId = 3, TrackId = 2 };
+                default:
+                    return new AvatarMeta { Name = baseName, Group = baseName, Index = 0, Faction = string.Empty, Track = baseName, FactionId = -1, TrackId = -1 };
+            }
+        }
+
+        private static void ResolveFactionInfo(string factionName, out string faction, out int factionId)
+        {
+            switch (factionName)
+            {
+                case "Undead": faction = "Undead"; factionId = 0; return;
+                case "Navy": faction = "Navy"; factionId = 1; return;
+                case "Creature": faction = "Creature"; factionId = 2; return;
+                case "Townfolk": faction = "Townfolk"; factionId = 3; return;
+                case "Pirate": faction = "Pirate"; factionId = 4; return;
+                case "TradingCo": faction = "TradingCo"; factionId = 5; return;
+                case "Ghost": faction = "Ghost"; factionId = 6; return;
+                case "VoodooZombie": faction = "VoodooZombie"; factionId = 7; return;
+                case "BountyHunter": faction = "BountyHunter"; factionId = 8; return;
+                default: faction = factionName ?? string.Empty; factionId = -1; return;
+            }
+        }
+
+        private static void ResolveGroupInfo(string group, out string faction, out string track, out int factionId, out int trackId)
+        {
+            factionId = -1;
+            trackId = -1;
             switch (group)
             {
                 case "LandCreatures":
-                    faction = "Creature"; track = "LandCreature"; return;
+                    faction = "Creature"; track = "LandCreature"; factionId = 2; trackId = 0; return;
                 case "Animals":
-                    faction = "Creature"; track = "Animal"; return;
+                    faction = "Creature"; track = "Animal"; factionId = 2; trackId = 4; return;
                 case "AirCreatures":
-                    faction = "Creature"; track = "AirCreature"; return;
+                    faction = "Creature"; track = "AirCreature"; factionId = 2; trackId = 2; return;
                 case "SeaCreatures":
-                    faction = "Creature"; track = "SeaCreature"; return;
+                    faction = "Creature"; track = "SeaCreature"; factionId = 2; trackId = 1; return;
                 case "EarthUndead":
-                    faction = "Undead"; track = "Earth"; return;
+                    faction = "Undead"; track = "Earth"; factionId = 0; trackId = 0; return;
                 case "AirUndead":
-                    faction = "Undead"; track = "Air"; return;
+                    faction = "Undead"; track = "Air"; factionId = 0; trackId = 1; return;
                 case "FireUndead":
-                    faction = "Undead"; track = "Fire"; return;
+                    faction = "Undead"; track = "Fire"; factionId = 0; trackId = 2; return;
                 case "WaterUndead":
-                    faction = "Undead"; track = "Water"; return;
+                    faction = "Undead"; track = "Water"; factionId = 0; trackId = 3; return;
+                case "BossUndead":
+                    faction = "Undead"; track = "Boss"; factionId = 0; trackId = 5; return;
                 case "FrenchUndead":
-                    faction = "Undead"; track = "French"; return;
+                    faction = "Undead"; track = "French"; factionId = 0; trackId = 6; return;
                 case "SpanishUndead":
-                    faction = "Undead"; track = "Spanish"; return;
+                    faction = "Undead"; track = "Spanish"; factionId = 0; trackId = 7; return;
+                case "EarthSpecialUndead":
+                    faction = "Undead"; track = "EarthSpecial"; factionId = 0; trackId = 8; return;
                 case "Marksmen":
+                    faction = "Navy"; track = group; factionId = 1; trackId = 1; return;
                 case "Soldiers":
+                    faction = "Navy"; track = group; factionId = 1; trackId = 0; return;
                 case "Leaders":
-                    faction = "Navy"; track = group; return;
+                    faction = "Navy"; track = group; factionId = 1; trackId = 2; return;
                 case "Mercenaries":
+                    faction = "TradingCo"; track = group; factionId = 5; trackId = 0; return;
                 case "Assassins":
+                    faction = "TradingCo"; track = group; factionId = 5; trackId = 1; return;
                 case "Officials":
-                    faction = "TradingCo"; track = group; return;
+                    faction = "TradingCo"; track = group; factionId = 5; trackId = 2; return;
                 case "GhostPirates":
+                    faction = "Ghost"; track = group; factionId = 6; trackId = 0; return;
                 case "KillerGhosts":
-                    faction = "Ghost"; track = group; return;
+                    faction = "Ghost"; track = group; factionId = 6; trackId = 1; return;
                 case "VoodooZombiePirates":
-                    faction = "VoodooZombie"; track = group; return;
+                    faction = "VoodooZombie"; track = group; factionId = 7; trackId = 0; return;
                 case "BountyHunters":
-                    faction = "BountyHunter"; track = group; return;
+                    faction = "BountyHunter"; track = group; factionId = 8; trackId = 0; return;
                 case "Brawlers":
+                    faction = "Pirate"; track = group; factionId = 4; trackId = 0; return;
                 case "Gunners":
-                    faction = "Pirate"; track = group; return;
+                    faction = "Pirate"; track = group; factionId = 4; trackId = 1; return;
                 case "Commoners":
+                    faction = "Townfolk"; track = group; factionId = 3; trackId = 0; return;
                 case "StoreOwners":
-                    faction = "Townfolk"; track = group; return;
+                    faction = "Townfolk"; track = group; factionId = 3; trackId = 1; return;
                 default:
                     faction = string.Empty; track = group; return;
             }
@@ -418,7 +560,7 @@ namespace WorldDataImporter.Utilities
             int low = ParseIntDefault(defaults, "p0", 0);
             int high = ParseIntDefault(defaults, "p1", low);
             return avatarMeta.Values
-                .Where(meta => meta.Group == group && meta.Index >= low && meta.Index <= high)
+                .Where(meta => !meta.IsBoss && meta.Group == group && meta.Index >= low && meta.Index <= high)
                 .OrderBy(meta => meta.Index)
                 .Select(meta => meta.Name)
                 .ToList();
@@ -449,6 +591,17 @@ namespace WorldDataImporter.Utilities
             AddEditorSpawnablesForGroup(spawnables, avatarMeta, "WaterUndead", "Undead - ");
         }
 
+        private static void AddAvatarTypeSpawnables(Dictionary<string, List<string>> spawnables, IReadOnlyDictionary<string, AvatarMeta> avatarMeta)
+        {
+            foreach (AvatarMeta meta in avatarMeta.Values.GroupBy(m => m.Name).Select(g => g.First()))
+            {
+                if (string.IsNullOrEmpty(meta.Name))
+                    continue;
+
+                spawnables["Avatar - " + meta.Name] = new List<string> { meta.Name };
+            }
+        }
+
         private static void AddEditorSpawnablesForGroup(
             Dictionary<string, List<string>> spawnables,
             IReadOnlyDictionary<string, AvatarMeta> avatarMeta,
@@ -457,6 +610,139 @@ namespace WorldDataImporter.Utilities
         {
             foreach (AvatarMeta meta in avatarMeta.Values.Where(m => m.Group == group).OrderBy(m => m.Index))
                 spawnables[prefix + meta.Name] = new List<string> { meta.Name };
+        }
+
+        private static BossNameCursor ParseLocalizedBossNames(string source)
+        {
+            var namesByTrack = new Dictionary<(int Faction, int Track), List<string>>();
+            string body = ExtractDictionaryBody(source ?? string.Empty, "BossNames");
+            if (string.IsNullOrEmpty(body))
+                return new BossNameCursor(namesByTrack);
+
+            var stack = new List<(int Indent, int Key)>();
+            foreach (string line in Regex.Split(body, @"\r?\n"))
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                int indent = line.TakeWhile(char.IsWhiteSpace).Count();
+                string trimmed = line.Trim();
+                while (stack.Count > 0 && stack[stack.Count - 1].Indent >= indent)
+                    stack.RemoveAt(stack.Count - 1);
+
+                Match branch = Regex.Match(trimmed, @"^(?<key>\d+)\s*:\s*\{");
+                if (branch.Success)
+                {
+                    stack.Add((indent, int.Parse(branch.Groups["key"].Value, CultureInfo.InvariantCulture)));
+                    continue;
+                }
+
+                Match leaf = Regex.Match(trimmed, @"^(?<key>\d+)\s*:\s*(?<value>u?'(?:\\'|[^'])*')");
+                if (!leaf.Success || stack.Count < 3)
+                    continue;
+
+                int faction = stack[stack.Count - 3].Key;
+                int track = stack[stack.Count - 2].Key;
+                var key = (faction, track);
+                if (!namesByTrack.TryGetValue(key, out List<string> names))
+                {
+                    names = new List<string>();
+                    namesByTrack[key] = names;
+                }
+
+                names.Add(TrimPythonString(leaf.Groups["value"].Value));
+            }
+
+            return new BossNameCursor(namesByTrack);
+        }
+
+        private static Dictionary<string, string> ParseBossNpcNames(string source)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string body = ExtractDictionaryBody(source ?? string.Empty, "BossNPCNames");
+            foreach (KeyValuePair<string, string> entry in ParseDictionaryEntries(body))
+            {
+                string key = TrimPythonString(entry.Key);
+                if (string.IsNullOrEmpty(key) || key.StartsWith("NPCIds.", StringComparison.Ordinal))
+                    continue;
+
+                result[key] = TrimPythonString(entry.Value);
+            }
+
+            return result;
+        }
+
+        private static Dictionary<string, PotcoBossData> ParseBossData(
+            string source,
+            IReadOnlyDictionary<string, string> uniqueBossNames,
+            out PotcoBossData defaultBossData)
+        {
+            var result = new Dictionary<string, PotcoBossData>(StringComparer.OrdinalIgnoreCase);
+            defaultBossData = new PotcoBossData();
+
+            string body = ExtractDictionaryBody(source ?? string.Empty, "BOSS_NPC_LIST");
+            foreach (KeyValuePair<string, string> entry in ParseDictionaryEntries(body))
+            {
+                string key = TrimPythonString(entry.Key);
+                if (key == string.Empty)
+                {
+                    ApplyBossFields(defaultBossData, entry.Value);
+                    continue;
+                }
+
+                PotcoBossData data = defaultBossData.Clone();
+                data.UniqueId = key;
+                ApplyBossFields(data, entry.Value);
+                if (uniqueBossNames != null && uniqueBossNames.TryGetValue(key, out string displayName))
+                    data.DisplayName = displayName;
+
+                result[key] = data;
+            }
+
+            return result;
+        }
+
+        private static void ApplyBossFields(PotcoBossData data, string body)
+        {
+            if (data == null || string.IsNullOrEmpty(body))
+                return;
+
+            foreach (Match match in Regex.Matches(body, @"'(?<field>HpScale|MpScale|GoldScale|ModelScale|DamageScale|ArmorScale)'\s*:\s*(?<value>[-+]?\d+(?:\.\d+)?)"))
+            {
+                float value = ParseFloat(match.Groups["value"].Value, 1f);
+                switch (match.Groups["field"].Value)
+                {
+                    case "HpScale": data.HpScale = value; break;
+                    case "MpScale": data.MpScale = value; break;
+                    case "GoldScale": data.GoldScale = value; break;
+                    case "ModelScale": data.ModelScale = value; break;
+                    case "DamageScale": data.DamageScale = value; break;
+                    case "ArmorScale": data.ArmorScale = value; break;
+                }
+            }
+
+            Match level = Regex.Match(body, @"'Level'\s*:\s*(?<value>\d+)");
+            if (level.Success)
+                data.LevelOverride = ParseInt(level.Groups["value"].Value, 0);
+
+            Match highlight = Regex.Match(body, @"'HighlightColor'\s*:\s*VBase3\((?<args>[^\)]*)\)");
+            if (highlight.Success)
+            {
+                List<string> parts = SplitTopLevel(highlight.Groups["args"].Value, ',');
+                if (parts.Count == 1)
+                {
+                    float value = ParseFloat(parts[0], 1f);
+                    data.HighlightColor = new Color(value, value, value, 1f);
+                }
+                else if (parts.Count >= 3)
+                {
+                    data.HighlightColor = new Color(
+                        ParseFloat(parts[0], 1f),
+                        ParseFloat(parts[1], 1f),
+                        ParseFloat(parts[2], 1f),
+                        1f);
+                }
+            }
         }
 
         private static Dictionary<string, EnemyStats> ParseEnemyStats(string source)
@@ -631,12 +917,11 @@ namespace WorldDataImporter.Utilities
             }
         }
 
-        private static string ResolveCreatureModelPath(string species)
+        private static string ResolveCreatureModelPath(string species, CreatureData creatureData = null)
         {
             if (string.IsNullOrEmpty(species))
                 return string.Empty;
 
-            CreatureData creatureData = CreatureDataParser.GetCreatureData(species);
             if (creatureData != null && !string.IsNullOrEmpty(creatureData.GetBestModelPath()))
                 return creatureData.GetBestModelPath();
 
@@ -701,15 +986,22 @@ namespace WorldDataImporter.Utilities
                    inventoryTypeConstants.TryGetValue(token, out id);
         }
 
-        private static string ResolveTypeAlias(string typeName)
+        private static string ResolveTypeAlias(
+            string typeName,
+            AvatarMeta meta,
+            IReadOnlyDictionary<string, EnemyStats> stats,
+            IReadOnlyDictionary<string, SkillLoadout> skillLoadouts)
         {
-            switch (typeName)
+            if ((stats != null && stats.ContainsKey(typeName)) ||
+                (skillLoadouts != null && skillLoadouts.ContainsKey(typeName)))
             {
-                case "LaSchafe": return "VoodooZombieBoss";
-                case "FrenchBossA": return "FrenchBoss";
-                case "SpanishBossA": return "SpanishBoss";
-                default: return typeName;
+                return typeName;
             }
+
+            if (meta != null && meta.IsBoss && !string.IsNullOrEmpty(meta.BossBaseName))
+                return meta.BossBaseName;
+
+            return typeName;
         }
 
         private static string ParseAvatarTypeKey(string key)
@@ -1020,6 +1312,36 @@ namespace WorldDataImporter.Utilities
             return c == '\'' || c == '"';
         }
 
+        private sealed class BossNameCursor
+        {
+            private readonly Dictionary<(int Faction, int Track), List<string>> namesByTrack;
+            private readonly Dictionary<(int Faction, int Track), int> positions =
+                new Dictionary<(int Faction, int Track), int>();
+
+            public BossNameCursor(Dictionary<(int Faction, int Track), List<string>> namesByTrack)
+            {
+                this.namesByTrack = namesByTrack ?? new Dictionary<(int Faction, int Track), List<string>>();
+            }
+
+            public List<string> TakeNames(int faction, int track, int count)
+            {
+                var result = new List<string>();
+                if (count <= 0)
+                    return result;
+
+                var key = (faction, track);
+                positions.TryGetValue(key, out int position);
+                if (namesByTrack.TryGetValue(key, out List<string> names))
+                {
+                    for (int i = 0; i < count && position + i < names.Count; i++)
+                        result.Add(names[position + i]);
+                }
+
+                positions[key] = position + count;
+                return result;
+            }
+        }
+
         private sealed class AvatarMeta
         {
             public string Name;
@@ -1027,6 +1349,12 @@ namespace WorldDataImporter.Utilities
             public int Index;
             public string Faction;
             public string Track;
+            public int FactionId;
+            public int TrackId;
+            public bool IsBoss;
+            public string BossBaseName;
+            public int BossIndex;
+            public string BossName;
         }
 
         private sealed class EnemyStats

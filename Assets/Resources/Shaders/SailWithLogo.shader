@@ -16,6 +16,68 @@ Shader "EggImporter/SailWithLogo"
         LOD 200
         Cull [_Cull]
 
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+            ZWrite On
+            ZTest LEqual
+            Cull [_Cull]
+
+            CGPROGRAM
+            #pragma vertex vertShadow
+            #pragma fragment fragShadow
+            #pragma multi_compile_shadowcaster
+            #include "UnityCG.cginc"
+
+            sampler2D _MainTex;
+            sampler2D _BlendTex;
+            sampler2D _AlphaTex;
+            fixed4 _Color;
+            float _Cutoff;
+
+            struct v2fShadow
+            {
+                V2F_SHADOW_CASTER;
+                float2 uvMain : TEXCOORD1;
+                float2 uvBlend : TEXCOORD2;
+                fixed4 color : COLOR;
+            };
+
+            v2fShadow vertShadow(appdata_full v)
+            {
+                v2fShadow o;
+                TRANSFER_SHADOW_CASTER_NORMALOFFSET(o)
+                o.uvMain = v.texcoord.xy;
+                o.uvBlend = v.texcoord1.xy;
+                o.color = v.color;
+                return o;
+            }
+
+            float4 fragShadow(v2fShadow i) : SV_Target
+            {
+                fixed4 texColor = tex2D(_MainTex, i.uvMain);
+                fixed4 blendColor = tex2D(_BlendTex, i.uvBlend);
+
+                if (blendColor.r < 0.99 || blendColor.g < 0.99 || blendColor.b < 0.99)
+                {
+                    texColor *= blendColor;
+                }
+
+                fixed alpha = (texColor * i.color * _Color).a;
+                fixed4 alphaTexColor = tex2D(_AlphaTex, float2(i.uvMain.x, 1.0 - i.uvMain.y));
+
+                if (alphaTexColor.r < 0.99 || alphaTexColor.g < 0.99 || alphaTexColor.b < 0.99)
+                {
+                    alpha *= alphaTexColor.r * 0.5;
+                }
+
+                clip(alpha - _Cutoff);
+                SHADOW_CASTER_FRAGMENT(i)
+            }
+            ENDCG
+        }
+
         CGPROGRAM
         #pragma surface surf BrightLambert vertex:vert alphatest:_Cutoff
         #include "UnityCG.cginc"

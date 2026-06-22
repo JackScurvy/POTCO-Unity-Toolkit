@@ -6,6 +6,7 @@ Shader "EggImporter/VertexColorTextureTransparent"
         _BlendTex ("Blend Texture (optional)", 2D) = "white" {}
         _AlphaTex ("Alpha Mask (optional)", 2D) = "white" {}
         _Color ("Color", Color) = (1,1,1,1)
+        _Cutoff ("Alpha Cutoff", Range(0,1)) = 0.1
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 2
         [Enum(Off,0,On,1)] _ZWrite ("ZWrite", Float) = 0
         [Enum(UnityEngine.Rendering.BlendMode)] _SrcBlend ("Source Blend", Float) = 5
@@ -24,6 +25,91 @@ Shader "EggImporter/VertexColorTextureTransparent"
         Cull [_Cull]
         ZWrite [_ZWrite]
         Blend [_SrcBlend] [_DstBlend]
+
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+            ZWrite On
+            ZTest LEqual
+            Cull [_Cull]
+
+            CGPROGRAM
+            #pragma vertex vertShadow
+            #pragma fragment fragShadow
+            #pragma multi_compile_shadowcaster
+            #include "UnityCG.cginc"
+
+            sampler2D _MainTex;
+            sampler2D _BlendTex;
+            sampler2D _AlphaTex;
+            fixed4 _Color;
+            float _Cutoff;
+            float _UseAlphaTex;
+            float _AlphaChannel;
+            float4 _MainTexWrap;
+            float4 _BlendTexWrap;
+
+            struct v2fShadow
+            {
+                V2F_SHADOW_CASTER;
+                float2 uvMain : TEXCOORD1;
+                float2 uvBlend : TEXCOORD2;
+                fixed4 color : COLOR;
+            };
+
+            float2 ApplyWrapModeShadow(float2 uv, float2 wrapMode)
+            {
+                float2 result = uv;
+                if (wrapMode.x > 0.5) result.x = saturate(result.x);
+                if (wrapMode.y > 0.5) result.y = saturate(result.y);
+                return result;
+            }
+
+            fixed SelectAlphaChannelShadow(fixed4 alphaTexColor)
+            {
+                if (_AlphaChannel > 2.5) return alphaTexColor.a;
+                if (_AlphaChannel > 1.5) return alphaTexColor.b;
+                if (_AlphaChannel > 0.5) return alphaTexColor.g;
+                return alphaTexColor.r;
+            }
+
+            v2fShadow vertShadow(appdata_full v)
+            {
+                v2fShadow o;
+                TRANSFER_SHADOW_CASTER_NORMALOFFSET(o)
+                o.uvMain = v.texcoord.xy;
+                o.uvBlend = v.texcoord1.xy;
+                o.color = v.color;
+                return o;
+            }
+
+            float4 fragShadow(v2fShadow i) : SV_Target
+            {
+                float2 mainUV = ApplyWrapModeShadow(i.uvMain, _MainTexWrap.xy);
+                float2 blendUV = ApplyWrapModeShadow(i.uvBlend, _BlendTexWrap.xy);
+
+                fixed4 texColor = tex2D(_MainTex, mainUV);
+                fixed4 blendColor = tex2D(_BlendTex, blendUV);
+
+                if (blendColor.r < 0.99 || blendColor.g < 0.99 || blendColor.b < 0.99)
+                {
+                    texColor *= blendColor;
+                }
+
+                fixed alpha = (texColor * i.color * _Color).a;
+
+                if (_UseAlphaTex > 0.5)
+                {
+                    fixed4 alphaTexColor = tex2D(_AlphaTex, float2(i.uvMain.x, 1.0 - i.uvMain.y));
+                    alpha *= SelectAlphaChannelShadow(alphaTexColor);
+                }
+
+                clip(alpha - _Cutoff);
+                SHADOW_CASTER_FRAGMENT(i)
+            }
+            ENDCG
+        }
 
         CGPROGRAM
         #pragma surface surf BrightLambert vertex:vert alpha:fade

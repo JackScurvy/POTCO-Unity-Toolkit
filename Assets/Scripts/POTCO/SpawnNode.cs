@@ -1,6 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 using System;
+using POTCO.Combat;
 
 namespace POTCO
 {
@@ -69,6 +70,19 @@ namespace POTCO
         [Tooltip("Notice Animation 2 imported from the world data file for this spawn node")]
         [SerializeField] private string worldNoticeAnimation2 = "";
 
+        [Header("World Data Boss")]
+        [Tooltip("Boss flag imported from the world data file for direct enemy objects")]
+        [SerializeField] private bool worldIsBoss = false;
+
+        [Tooltip("Unique world-data boss object id used by BossNPCList.py")]
+        [SerializeField] private string worldBossUniqueId = "";
+
+        [Tooltip("Merged boss data from BossNPCList.py and PLocalizerEnglish.py")]
+        [SerializeField] private PotcoBossData worldBossData = new PotcoBossData();
+
+        [Tooltip("Explicit non-boss level imported from the world data file")]
+        [SerializeField] private int worldLevelOverride = 0;
+
         [Header("Editor Spawning")]
         [Tooltip("Has this spawn node already spawned its creatures?")]
         [SerializeField] private bool hasSpawned = false;
@@ -85,6 +99,20 @@ namespace POTCO
             worldGreetingAnimation = greetingAnimation ?? "";
             worldNoticeAnimation1 = noticeAnimation1 ?? "";
             worldNoticeAnimation2 = noticeAnimation2 ?? "";
+        }
+
+        public void SetWorldBossData(bool isBoss, string uniqueId, PotcoBossData bossData)
+        {
+            worldIsBoss = isBoss;
+            worldBossUniqueId = uniqueId ?? "";
+            worldBossData = bossData?.Clone() ?? new PotcoBossData();
+            if (!string.IsNullOrEmpty(worldBossUniqueId))
+                worldBossData.UniqueId = worldBossUniqueId;
+        }
+
+        public void SetWorldLevelOverride(int level)
+        {
+            worldLevelOverride = Mathf.Max(0, level);
         }
 
         /// <summary>
@@ -253,7 +281,7 @@ namespace POTCO
             if (variant == null)
                 return null;
 
-            int level = variant.PickLevel();
+            int level = ResolveEnemyLevel(variant);
             Debug.Log($"[SpawnNode] Spawning POTCO enemy {variant.TypeName} ({variant.Kind}) level {level}");
 
             switch (variant.Kind)
@@ -296,8 +324,9 @@ namespace POTCO
             }
 
             string species = string.IsNullOrEmpty(variant.CreatureSpecies) ? variant.TypeName : variant.CreatureSpecies;
-            LoadCreatureAnimations(animComponent, species);
-            AddCreatureAnimationPlayer(model, species);
+            PotcoCreatureAnimationDefinition animationDefinition = PotcoCreatureAnimationCatalog.FromVariant(variant);
+            LoadCreatureAnimations(animComponent, animationDefinition);
+            AddCreatureAnimationPlayer(model, species, animationDefinition.AnimationPrefix);
             ConfigureEnemyRuntime(enemyRoot, variant, level, species);
             return enemyRoot;
         }
@@ -393,6 +422,17 @@ namespace POTCO
             return SpawnHumanEnemy(variant, 1);
         }
 
+        private int ResolveEnemyLevel(PotcoEnemyVariantData variant)
+        {
+            if (worldIsBoss && worldBossData != null && worldBossData.LevelOverride > 0)
+                return worldBossData.LevelOverride;
+
+            if (worldLevelOverride > 0)
+                return worldLevelOverride;
+
+            return variant?.PickLevel() ?? 1;
+        }
+
         private GameObject LoadCreaturePrefab(string modelPath)
         {
             if (string.IsNullOrEmpty(modelPath))
@@ -484,7 +524,9 @@ namespace POTCO
             if (enemyRoot == null || variant == null)
                 return;
 
-            float resolvedScale = variant.ResolveScale(level);
+            PotcoBossData effectiveBoss = ResolveEffectiveBossData(variant);
+            float bossScaleMultiplier = worldIsBoss ? (effectiveBoss?.ModelScale ?? 1f) : 1f;
+            float resolvedScale = variant.ResolveScale(level, bossScaleMultiplier, !worldIsBoss);
             enemyRoot.transform.localScale = Vector3.one * Mathf.Max(0.01f, resolvedScale);
 
             NPCData npcData = enemyRoot.GetComponent<NPCData>();
@@ -518,6 +560,17 @@ namespace POTCO
             npcData.enemyWeaponIds = variant.WeaponItemIds?.ToArray() ?? Array.Empty<int>();
             npcData.enemySkillNames = variant.SkillNames?.ToArray() ?? Array.Empty<string>();
             npcData.enemySkillIds = variant.SkillIds?.ToArray() ?? Array.Empty<int>();
+            npcData.isBoss = effectiveBoss != null;
+            npcData.bossUniqueId = effectiveBoss?.UniqueId ?? "";
+            npcData.bossName = ResolveBossDisplayName(variant, effectiveBoss);
+            npcData.bossHpScale = effectiveBoss?.HpScale ?? 1f;
+            npcData.bossMpScale = effectiveBoss?.MpScale ?? 1f;
+            npcData.bossGoldScale = effectiveBoss?.GoldScale ?? 1f;
+            npcData.bossModelScale = effectiveBoss?.ModelScale ?? 1f;
+            npcData.bossDamageScale = effectiveBoss?.DamageScale ?? 1f;
+            npcData.bossArmorScale = effectiveBoss?.ArmorScale ?? 1f;
+            npcData.bossHighlightColor = effectiveBoss?.HighlightColor ?? Color.white;
+            ConfigureGhostRuntime(enemyRoot, variant, npcData, effectiveBoss);
 
             CharacterController controller = enemyRoot.GetComponent<CharacterController>();
             if (controller == null)
@@ -542,6 +595,94 @@ namespace POTCO
             if (loadout == null)
                 loadout = enemyRoot.AddComponent<PotcoEnemyCombatLoadout>();
             loadout.Initialize(variant, level);
+
+            PotcoCombatTarget combatTarget = enemyRoot.GetComponent<PotcoCombatTarget>();
+            if (combatTarget == null)
+                combatTarget = enemyRoot.AddComponent<PotcoCombatTarget>();
+            float hpScale = Mathf.Max(1f, npcData.bossHpScale);
+            combatTarget.ResetHealth(Mathf.Max(100f, level * 100f) * hpScale);
+        }
+
+        private void ConfigureGhostRuntime(GameObject enemyRoot, PotcoEnemyVariantData variant, NPCData npcData, PotcoBossData effectiveBoss)
+        {
+            if (enemyRoot == null || variant == null || npcData == null)
+                return;
+
+            bool isGhost = variant.Kind == PotcoEnemyKind.Human &&
+                (variant.HumanPreset == PotcoEnemyHumanPreset.Ghost ||
+                 string.Equals(variant.Faction, "Ghost", StringComparison.OrdinalIgnoreCase));
+
+            npcData.isGhost = isGhost;
+            npcData.ghostColorIndex = 0;
+            npcData.ghostMode = 0;
+            npcData.ghostBodyColor = Color.white;
+            npcData.ghostEffectSource = "";
+
+            if (!isGhost)
+                return;
+
+            ResolveReferenceGhostState(variant, effectiveBoss, out int colorIndex, out int ghostMode, out string source);
+            PotcoGhostEffect effect = enemyRoot.GetComponent<PotcoGhostEffect>();
+            if (effect == null)
+                effect = enemyRoot.AddComponent<PotcoGhostEffect>();
+
+            effect.Configure(colorIndex, ghostMode);
+            npcData.ghostColorIndex = colorIndex;
+            npcData.ghostMode = ghostMode;
+            npcData.ghostBodyColor = PotcoGhostEffect.ResolveGhostColor(colorIndex);
+            npcData.ghostEffectSource = source;
+        }
+
+        private static void ResolveReferenceGhostState(PotcoEnemyVariantData variant, PotcoBossData effectiveBoss, out int colorIndex, out int ghostMode, out string source)
+        {
+            if (variant != null &&
+                (string.Equals(variant.Track, "KillerGhosts", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(variant.TypeName, "RageGhost", StringComparison.OrdinalIgnoreCase) ||
+                 (variant.TypeName ?? string.Empty).IndexOf("KillerGhost", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                colorIndex = 4;
+                ghostMode = 3;
+                source = "DistributedKillerGhost.selectedGhostColor/peaceGhostMode";
+                return;
+            }
+
+            if (effectiveBoss != null || (variant != null && variant.IsBoss))
+            {
+                colorIndex = 13;
+                ghostMode = 2;
+                source = "DistributedBossGhost.enemyColor/attackGhostMode";
+                return;
+            }
+
+            colorIndex = 2;
+            ghostMode = 1;
+            source = "DistributedGhost.enemyColor/peaceGhostMode";
+        }
+
+        private PotcoBossData ResolveEffectiveBossData(PotcoEnemyVariantData variant)
+        {
+            if (worldIsBoss)
+            {
+                PotcoBossData data = worldBossData?.Clone() ?? new PotcoBossData();
+                if (!string.IsNullOrEmpty(worldBossUniqueId))
+                    data.UniqueId = worldBossUniqueId;
+                if (string.IsNullOrEmpty(data.DisplayName) && variant != null && variant.IsBoss)
+                    data.DisplayName = variant.BossName;
+                return data;
+            }
+
+            return variant != null && variant.IsBoss ? variant.BossData?.Clone() : null;
+        }
+
+        private string ResolveBossDisplayName(PotcoEnemyVariantData variant, PotcoBossData bossData)
+        {
+            if (bossData != null && !string.IsNullOrEmpty(bossData.DisplayName))
+                return bossData.DisplayName;
+
+            if (variant != null && variant.IsBoss && !string.IsNullOrEmpty(variant.BossName))
+                return variant.BossName;
+
+            return variant?.TypeName ?? "";
         }
 
         private void EnablePatrol(NPCController npcController)
@@ -554,6 +695,11 @@ namespace POTCO
 
         private void AddCreatureAnimationPlayer(GameObject model, string species)
         {
+            AddCreatureAnimationPlayer(model, species, PotcoCreatureAnimationCatalog.Resolve(species).AnimationPrefix);
+        }
+
+        private void AddCreatureAnimationPlayer(GameObject model, string species, string animationPrefix)
+        {
             if (model == null)
                 return;
 
@@ -561,9 +707,9 @@ namespace POTCO
             if (animalAnimPlayer == null)
                 animalAnimPlayer = model.AddComponent<AnimalAnimationPlayer>();
 
-            string animPrefix = (species ?? string.Empty).ToLowerInvariant();
-            animPrefix = System.Text.RegularExpressions.Regex.Replace(animPrefix, "_hi$|_lo$|_mid$", "");
-            animalAnimPlayer.animationPrefix = animPrefix;
+            animalAnimPlayer.animationPrefix = string.IsNullOrEmpty(animationPrefix)
+                ? PotcoCreatureAnimationCatalog.Resolve(species).AnimationPrefix
+                : animationPrefix;
             animalAnimPlayer.currentState = string.IsNullOrEmpty(startState) ? "LandRoam" : startState;
         }
 
@@ -798,53 +944,54 @@ namespace POTCO
         /// </summary>
         private void LoadCreatureAnimations(RuntimeAnimatorPlayer animComponent, string species)
         {
-            if (animComponent == null) return;
+            LoadCreatureAnimations(animComponent, PotcoCreatureAnimationCatalog.Resolve(species));
+        }
 
-            // Get the base model name without LOD suffix (e.g., "alligator_hi" -> "alligator")
-            string baseModelName = System.Text.RegularExpressions.Regex.Replace(species, "_hi$|_lo$|_mid$", "");
+        private void LoadCreatureAnimations(RuntimeAnimatorPlayer animComponent, PotcoCreatureAnimationDefinition definition)
+        {
+            if (animComponent == null || definition == null)
+                return;
 
-            // Common animation names for creatures
-            string[] commonAnimations = new string[]
+            string animationPrefix = string.IsNullOrEmpty(definition.AnimationPrefix)
+                ? PotcoCreatureAnimationCatalog.ResolveAnimationPrefix(definition.Species, string.Empty)
+                : definition.AnimationPrefix;
+
+            foreach ((string animName, string animFile) in definition.EnumerateAnimations())
             {
-                "idle", "walk", "run", "swim", "eat", "sleep", "attack", "hit", "death"
-            };
+                string clipName = $"{animationPrefix}_{animName}";
+                string cacheKey = $"{animationPrefix}_{animName}_{animFile}";
 
-            foreach (string animName in commonAnimations)
-            {
-                // Animation files are at: phase_#/models/char/alligator_idle.egg
-                string clipName = $"{baseModelName}_{animName}";
-                string cacheKey = $"{species}_{animName}"; // Use species as key base for safety
-
-                AnimationClip clip = null;
-
-                if (!s_creatureAnimCache.TryGetValue(cacheKey, out clip))
+                if (!s_creatureAnimCache.TryGetValue(cacheKey, out AnimationClip clip))
                 {
-                    string[] pathsToTry = new string[]
-                    {
-                        $"phase_4/models/char/{baseModelName}_{animName}",
-                        $"phase_3/models/char/{baseModelName}_{animName}",
-                        $"phase_5/models/char/{baseModelName}_{animName}",
-                        $"phase_2/models/char/{baseModelName}_{animName}",
-                        $"phase_6/models/char/{baseModelName}_{animName}",
-                    };
-
-                    foreach (string path in pathsToTry)
+                    foreach (string path in BuildCreatureAnimationResourceCandidates(animationPrefix, animFile))
                     {
                         clip = Resources.Load<AnimationClip>(path);
-                        if (clip != null) break;
+                        if (clip != null)
+                            break;
                     }
 
                     if (clip != null)
-                    {
                         s_creatureAnimCache[cacheKey] = clip;
-                    }
                 }
 
-                if (clip != null)
-                {
-                    animComponent.AddClip(clip, clipName);
-                    animComponent.SetWrapMode(clipName, WrapMode.Loop);
-                }
+                if (clip == null)
+                    continue;
+
+                animComponent.AddClip(clip, clipName);
+                animComponent.SetWrapMode(clipName, WrapMode.Loop);
+            }
+        }
+
+        private static IEnumerable<string> BuildCreatureAnimationResourceCandidates(string animationPrefix, string animFile)
+        {
+            string[] phases = { "phase_4", "phase_3", "phase_5", "phase_2", "phase_6" };
+            string[] folders = { "models/char", "char" };
+            string clipName = string.IsNullOrEmpty(animationPrefix) ? animFile : $"{animationPrefix}_{animFile}";
+
+            foreach (string phase in phases)
+            {
+                foreach (string folder in folders)
+                    yield return $"{phase}/{folder}/{clipName}";
             }
         }
 

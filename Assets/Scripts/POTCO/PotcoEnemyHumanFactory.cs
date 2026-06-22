@@ -20,6 +20,12 @@ namespace POTCO
         private static readonly int[] ReferenceMustaches = { 0, 1, 2 };
         private static readonly int[] ReferenceHairColors = { 0, 1, 2, 3, 4, 5, 6, 7 };
         private static readonly int[] ReferenceEyeColors = { 0, 1, 2, 3, 4, 5 };
+        private static readonly string[] ReferenceGhostGenderChoices = { "m", "m", "f" };
+        private static readonly int[] ReferenceGhostMaleHairStyles = { 1, 2, 3, 4, 5, 6 };
+        private static readonly int[] ReferenceGhostMustaches = { 0, 1, 2, 4 };
+        private static readonly int[] ReferenceGhostFemaleShirts = { 3, 4, 5 };
+        private static readonly int[] ReferenceGhostFemalePants = { 0, 2 };
+        private static readonly int[] ReferenceGhostFemaleShoes = { 1, 2, 3, 4 };
         private static readonly string[] ReferenceHeadMorphs =
         {
             "jawWidth",
@@ -154,12 +160,7 @@ namespace POTCO
                     dna.botColorIdx = 4 + random.Next(0, 8);
                     break;
                 case PotcoEnemyHumanPreset.Ghost:
-                    dna.gender = "m";
-                    dna.skinColorIdx = 0;
-                    dna.coat = 1;
-                    dna.pants = 1;
-                    dna.topColorIdx = 7;
-                    dna.botColorIdx = 7;
+                    ApplyGhostDna(dna, random);
                     break;
                 default:
                     dna.shirt = 1;
@@ -169,6 +170,45 @@ namespace POTCO
             }
 
             return dna;
+        }
+
+        private static void ApplyGhostDna(PirateDNA dna, System.Random random)
+        {
+            int colorCount = Mathf.Max(1, ResolveDyeColorCount());
+            dna.gender = Pick(random, ReferenceGhostGenderChoices);
+            dna.bodyShape = ResolveBodyShapeName(dna.gender, Pick(random, ReferenceNpcBodyChoices));
+            dna.bodyHeight = 0f;
+            dna.skinColorIdx = 0;
+            dna.belt = 0;
+            dna.coat = random.Next(0, 3);
+            dna.coatTex = 0;
+            dna.topColorIdx = random.Next(0, colorCount);
+            dna.botColorIdx = random.Next(0, colorCount);
+            dna.hatColorIdx = random.Next(0, colorCount);
+            dna.shoesColorIdx = random.Next(0, colorCount);
+            dna.hairColorIdx = random.Next(0, 5);
+            dna.headTexture = 0;
+            dna.eyeColorIdx = Pick(random, ReferenceEyeColors);
+
+            if (dna.gender == "m")
+            {
+                dna.shirt = 6;
+                dna.pants = 1;
+                dna.shoes = 1;
+                dna.hat = random.Next(0, 5);
+                dna.hair = Pick(random, ReferenceGhostMaleHairStyles);
+                dna.beard = random.Next(0, 11);
+                dna.mustache = Pick(random, ReferenceGhostMustaches);
+                return;
+            }
+
+            dna.shirt = Pick(random, ReferenceGhostFemaleShirts);
+            dna.pants = Pick(random, ReferenceGhostFemalePants);
+            dna.shoes = Pick(random, ReferenceGhostFemaleShoes);
+            dna.hat = 0;
+            dna.hair = random.Next(0, 16);
+            dna.beard = 0;
+            dna.mustache = 0;
         }
 
         private static void ApplyUniform(PirateDNA dna, int coat, int pants, int shoes, int hat, int topColor, int botColor)
@@ -194,16 +234,24 @@ namespace POTCO
 
         private static string ResolveNeutralBodyShapeName(int bodyChoiceIndex)
         {
+            return ResolveBodyShapeName("m", bodyChoiceIndex);
+        }
+
+        private static string ResolveBodyShapeName(string gender, int bodyChoiceIndex)
+        {
             try
             {
                 s_dataSource ??= new PureCSharpDataSource();
-                s_dataSource.LoadBodyShapes("m");
-                return s_dataSource.GetBodyShapeNameFromIndex("m", bodyChoiceIndex);
+                s_dataSource.LoadBodyShapes(gender);
+                return s_dataSource.GetBodyShapeNameFromIndex(gender, bodyChoiceIndex);
             }
             catch (System.Exception ex)
             {
-                Debug.LogWarning($"[PotcoEnemyHumanFactory] Failed to resolve neutral body shape index {bodyChoiceIndex}: {ex.Message}");
+                Debug.LogWarning($"[PotcoEnemyHumanFactory] Failed to resolve {gender} body shape index {bodyChoiceIndex}: {ex.Message}");
             }
+
+            if (gender == "f")
+                return "FemaleIdeal";
 
             return bodyChoiceIndex switch
             {
@@ -214,6 +262,23 @@ namespace POTCO
                 9 => "MaleHuge",
                 _ => "MaleIdeal"
             };
+        }
+
+        private static int ResolveDyeColorCount()
+        {
+            try
+            {
+                s_dataSource ??= new PureCSharpDataSource();
+                var palettes = s_dataSource.LoadPalettesAndDyeRules();
+                if (palettes?.dye != null && palettes.dye.Count > 0)
+                    return palettes.dye.Count;
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"[PotcoEnemyHumanFactory] Failed to resolve dye palette count for ghost DNA: {ex.Message}");
+            }
+
+            return 64;
         }
 
         private static void PopulateReferenceHeadMorphs(PirateDNA dna, System.Random random)

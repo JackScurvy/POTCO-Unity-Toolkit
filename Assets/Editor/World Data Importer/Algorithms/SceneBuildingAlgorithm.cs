@@ -208,7 +208,7 @@ namespace WorldDataImporter.Algorithms
 
                     // Check if Spawn Node is ready for spawning after property processing
                     if (currentData != null &&
-                        currentData.objectType == "Spawn Node" &&
+                        ShouldQueueEnemySpawn(currentData) &&
                         currentData.isReadyForEnemySpawn &&
                         !enemiesSpawnedSet.Contains(currentData))
                     {
@@ -531,7 +531,7 @@ namespace WorldDataImporter.Algorithms
 
                     // Check if Spawn Node is ready for spawning after property processing
                     if (currentData != null &&
-                        currentData.objectType == "Spawn Node" &&
+                        ShouldQueueEnemySpawn(currentData) &&
                         currentData.isReadyForEnemySpawn &&
                         !enemiesSpawnedSet.Contains(currentData))
                     {
@@ -670,6 +670,26 @@ namespace WorldDataImporter.Algorithms
                 {
                     DebugLogger.LogWorldImporter($"      - {kvp.Key}: {kvp.Value}");
                 }
+            }
+        }
+
+        private static bool ShouldQueueEnemySpawn(ObjectData data)
+        {
+            if (data == null)
+                return false;
+
+            switch (data.objectType)
+            {
+                case "Spawn Node":
+                case "Creature":
+                case "Skeleton":
+                case "NavySailor":
+                case "Ghost":
+                    return true;
+                case "Townsperson":
+                    return data.isBoss;
+                default:
+                    return false;
             }
         }
 

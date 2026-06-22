@@ -47,6 +47,14 @@ namespace WorldDataImporter.Data
         public string npcNoticeAnim1;   // Notice Animation 1
         public string npcNoticeAnim2;   // Notice Animation 2
 
+        // Direct enemy/NPC enemy properties (Creature, Skeleton, NavySailor, Ghost, boss Townsperson)
+        public bool isBoss;             // Boss flag from world data
+        public string bossName;         // Boss Name field from world data, usually "Anonymous"
+        public int? enemyLevel;         // Explicit Level field from world data
+        public int? avatarTrack;        // AvTrack for skeleton/navy/ghost enemies
+        public int? avatarId;           // AvId for skeleton/navy/ghost enemies
+        public string navyFaction;      // NavyFaction: Navy or TradingCo
+
         // Animal properties (Type = "Animal")
         public string species;          // Species (Chicken, Rooster, Pig, Alligator, etc.)
         public bool? respawns;          // Respawns flag

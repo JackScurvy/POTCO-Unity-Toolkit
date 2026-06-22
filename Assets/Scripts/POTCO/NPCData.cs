@@ -35,6 +35,25 @@ namespace POTCO
         public string[] enemySkillNames = System.Array.Empty<string>();
         public int[] enemySkillIds = System.Array.Empty<int>();
 
+        [Header("POTCO Ghost")]
+        public bool isGhost = false;
+        public int ghostColorIndex = 0;
+        public int ghostMode = 0;
+        public Color ghostBodyColor = Color.white;
+        public string ghostEffectSource = "";
+
+        [Header("POTCO Boss")]
+        public bool isBoss = false;
+        public string bossUniqueId = "";
+        public string bossName = "";
+        public float bossHpScale = 1f;
+        public float bossMpScale = 1f;
+        public float bossGoldScale = 1f;
+        public float bossModelScale = 1f;
+        public float bossDamageScale = 1f;
+        public float bossArmorScale = 1f;
+        public Color bossHighlightColor = Color.white;
+
         [Header("Animations")]
         public string animSet = "default";       // Animation set
         public string greetingAnimation = "";    // Greeting Animation
