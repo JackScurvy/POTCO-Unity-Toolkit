@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -17,15 +18,38 @@ namespace POTCO
         private const string EyeSurfaceMaterialMarker = "POTCO Ghost Eye Surface";
         private const int RegularEnemyGhostColor = 2;
         private const int PeaceGhostMode = 1;
-        private const float PeaceBodyAlpha = 0.6f;
-        private const float BattleBodyAlpha = 0.34f;
-        private const float KillerBodyAlpha = 0.34f;
-        private const float BattleBodyColorIntensity = 0.34f;
-        private const float KillerBodyColorIntensity = 0.34f;
+        private const int BattleGhostMode = 2;
+        private const int OrbGhostMode = 3;
+        private const int InvisibleGhostMode = 4;
+        private const int LocalInvisibleGhostMode = 5;
+        private const float PeaceBodyAlpha = 0.25f;
+        private const float BattleBodyAlpha = 0.26f;
+        private const float BattleBodyColorIntensity = 0.42f;
+        private const float HiddenBodyAlpha = 0f;
+        private const float PeaceFlickerMinMultiplier = 0.72f;
+        private const float PeaceFlickerMaxMultiplier = 1f;
+        private const float PeaceFlickerMinInterval = 0.16f;
+        private const float PeaceFlickerMaxInterval = 0.32f;
+        private const float PeaceFlickerSmoothTime = 0.18f;
         private const float NormalAuraAlpha = 0.25f;
-        private const float ThickAuraAlpha = 0.82f;
-        private const float GlowShadowAlpha = 0.72f;
-        private const float GlowShadowScale = 11.2f;
+        private const float ThickAuraAlpha = 0.5f;
+        private const float GlowShadowAlpha = 0.5f;
+        private const float GlowShadowScale = 20f;
+        private const float ReferenceAuraMinY = -0.5f;
+        private const float ReferenceAuraMaxY = 7f;
+        private const float ReferenceOrbAuraMinY = 3.5f;
+        private const float ReferenceNormalAuraWidth = 2f;
+        private const float ReferenceWideAuraWidth = 3f;
+        private const int PeaceAuraMaxParticles = 72;
+        private const float PeaceAuraEmissionRate = 40f;
+        private const int BattleAuraMaxParticles = 87;
+        private const float BattleAuraEmissionRate = 48f;
+        private const int OrbAuraMaxParticles = 72;
+        private const float OrbAuraEmissionRate = 40f;
+        private const int DefaultBodyRenderQueueOffset = 4;
+        private const int AuraRenderQueueOffset = 10;
+        private const int BattleBodyRenderQueueOffset = 15;
+        private const int EyeSurfaceRenderQueueOffset = 20;
 
         private static readonly int ColorProperty = Shader.PropertyToID("_Color");
         private static readonly int BaseColorProperty = Shader.PropertyToID("_BaseColor");
@@ -35,6 +59,9 @@ namespace POTCO
         private static readonly int SrcBlendProperty = Shader.PropertyToID("_SrcBlend");
         private static readonly int DstBlendProperty = Shader.PropertyToID("_DstBlend");
         private static readonly int ZWriteProperty = Shader.PropertyToID("_ZWrite");
+        private static readonly int ZTestProperty = Shader.PropertyToID("_ZTest");
+        private static readonly int OffsetFactorProperty = Shader.PropertyToID("_OffsetFactor");
+        private static readonly int OffsetUnitsProperty = Shader.PropertyToID("_OffsetUnits");
         private static readonly int CullProperty = Shader.PropertyToID("_Cull");
         private static readonly int AlphaTexProperty = Shader.PropertyToID("_AlphaTex");
         private static readonly int AlphaProperty = Shader.PropertyToID("_Alpha");
@@ -56,10 +83,14 @@ namespace POTCO
         private Color appliedBodyColor = new Color(float.NaN, float.NaN, float.NaN, float.NaN);
         private float flickerTimer;
         private float flickerMultiplier = 1f;
+        private float flickerTargetMultiplier = 1f;
+        private float flickerVelocity;
         private Renderer glowRenderer;
         private Vector3 glowBaseScale = Vector3.one * 18f;
         private Transform eyeRoot;
         private Transform eyeAnchor;
+        private readonly Dictionary<Renderer, Material[]> originalEyeMaterials = new Dictionary<Renderer, Material[]>();
+        private readonly Dictionary<Renderer, MaterialPropertyBlock> originalEyePropertyBlocks = new Dictionary<Renderer, MaterialPropertyBlock>();
 
         public int GhostColorIndex => ghostColorIndex;
         public int GhostMode => ghostMode;
@@ -72,6 +103,8 @@ namespace POTCO
             bodyColor = ResolveGhostColor(colorIndex);
             settingsDirty = true;
             flickerMultiplier = 1f;
+            flickerTargetMultiplier = 1f;
+            flickerVelocity = 0f;
             ApplyNow();
         }
 
@@ -104,13 +137,7 @@ namespace POTCO
             if (ghostMode != PeaceGhostMode)
                 return;
 
-            flickerTimer -= Time.deltaTime;
-            if (flickerTimer <= 0f)
-            {
-                flickerTimer = Random.Range(0.06f, 0.14f);
-                flickerMultiplier = Random.Range(0.5f, 1f);
-                ApplyBodyMaterialState(ResolveCurrentBodyMaterialColor());
-            }
+            UpdatePeaceFlicker(Time.deltaTime);
         }
 
         private void LateUpdate()
@@ -158,6 +185,7 @@ namespace POTCO
         private void ApplyBodyMaterialState(Color color)
         {
             BlendMode destinationBlend = ResolveBodyDestinationBlend();
+            int renderQueue = ResolveBodyRenderQueue();
             Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
             foreach (Renderer renderer in renderers)
             {
@@ -175,9 +203,9 @@ namespace POTCO
                 bool changed = false;
                 for (int i = 0; i < sourceMaterials.Length; i++)
                 {
-                    ghostMaterials[i] = IsGhostBodyMaterial(sourceMaterials[i], color, destinationBlend)
-                        ? UpdateGhostMaterial(sourceMaterials[i], color, destinationBlend)
-                        : CreateGhostMaterial(sourceMaterials[i], color, destinationBlend);
+                    ghostMaterials[i] = IsGhostBodyMaterial(sourceMaterials[i], color, destinationBlend, renderQueue)
+                        ? UpdateGhostMaterial(sourceMaterials[i], color, destinationBlend, renderQueue)
+                        : CreateGhostMaterial(sourceMaterials[i], color, destinationBlend, renderQueue);
                     changed |= !ReferenceEquals(ghostMaterials[i], sourceMaterials[i]);
                 }
 
@@ -202,14 +230,14 @@ namespace POTCO
             renderer.SetPropertyBlock(block);
         }
 
-        private static Material CreateGhostMaterial(Material source, Color color, BlendMode destinationBlend)
+        private static Material CreateGhostMaterial(Material source, Color color, BlendMode destinationBlend, int renderQueue)
         {
             Material material = source != null ? new Material(source) : new Material(ResolveBodyShader());
             material.name = BuildGhostMaterialName(source);
-            return UpdateGhostMaterial(material, color, destinationBlend);
+            return UpdateGhostMaterial(material, color, destinationBlend, renderQueue);
         }
 
-        private static Material UpdateGhostMaterial(Material material, Color color, BlendMode destinationBlend)
+        private static Material UpdateGhostMaterial(Material material, Color color, BlendMode destinationBlend, int renderQueue)
         {
             if (material == null)
                 material = new Material(ResolveBodyShader());
@@ -229,7 +257,7 @@ namespace POTCO
             if (material.HasProperty(CullProperty))
                 material.SetFloat(CullProperty, (float)CullMode.Back);
 
-            material.renderQueue = (int)RenderQueue.Transparent + 4;
+            material.renderQueue = renderQueue;
             material.EnableKeyword("_ALPHABLEND_ON");
             material.DisableKeyword("_ALPHATEST_ON");
             return material;
@@ -274,7 +302,7 @@ namespace POTCO
             if (material.HasProperty(CullProperty))
                 material.SetFloat(CullProperty, (float)CullMode.Back);
 
-            material.renderQueue = (int)RenderQueue.Transparent + 20;
+            material.renderQueue = (int)RenderQueue.Transparent + EyeSurfaceRenderQueueOffset;
             return material;
         }
 
@@ -296,7 +324,7 @@ namespace POTCO
             return $"{baseName} ({EyeSurfaceMaterialMarker})";
         }
 
-        private static bool IsGhostBodyMaterial(Material material, Color expectedColor, BlendMode expectedDestinationBlend)
+        private static bool IsGhostBodyMaterial(Material material, Color expectedColor, BlendMode expectedDestinationBlend, int expectedRenderQueue)
         {
             if (material == null || material.shader != ResolveBodyShader())
                 return false;
@@ -313,7 +341,7 @@ namespace POTCO
                    Mathf.Approximately(material.GetFloat(SrcBlendProperty), (float)BlendMode.SrcAlpha) &&
                    Mathf.Approximately(material.GetFloat(DstBlendProperty), (float)expectedDestinationBlend) &&
                    Mathf.Approximately(material.GetFloat(ZWriteProperty), 0f) &&
-                   material.renderQueue >= (int)RenderQueue.Transparent;
+                   material.renderQueue == expectedRenderQueue;
         }
 
         private static bool IsEyeSurfaceMaterial(Material material)
@@ -346,28 +374,39 @@ namespace POTCO
 
         private Color ResolveBodyMaterialColor(Color color)
         {
-            float alpha = ghostMode switch
+            float alpha;
+            float intensity;
+            switch (ghostMode)
             {
-                PeaceGhostMode => PeaceBodyAlpha,
-                3 => KillerBodyAlpha,
-                4 => KillerBodyAlpha,
-                _ => BattleBodyAlpha
-            };
-
-            float intensity = ghostMode switch
-            {
-                PeaceGhostMode => 1f,
-                3 => KillerBodyColorIntensity,
-                4 => KillerBodyColorIntensity,
-                _ => BattleBodyColorIntensity
-            };
+                case PeaceGhostMode:
+                    alpha = PeaceBodyAlpha;
+                    intensity = 1f;
+                    break;
+                case BattleGhostMode:
+                    alpha = BattleBodyAlpha;
+                    intensity = BattleBodyColorIntensity;
+                    break;
+                case OrbGhostMode:
+                case InvisibleGhostMode:
+                case LocalInvisibleGhostMode:
+                default:
+                    alpha = HiddenBodyAlpha;
+                    intensity = 0f;
+                    break;
+            }
 
             return new Color(color.r * intensity, color.g * intensity, color.b * intensity, alpha);
         }
 
         private BlendMode ResolveBodyDestinationBlend()
         {
-            return ghostMode == PeaceGhostMode ? BlendMode.One : BlendMode.OneMinusSrcAlpha;
+            return BlendMode.One;
+        }
+
+        private int ResolveBodyRenderQueue()
+        {
+            int offset = ghostMode == BattleGhostMode ? BattleBodyRenderQueueOffset : DefaultBodyRenderQueueOffset;
+            return (int)RenderQueue.Transparent + offset;
         }
 
         private void RefreshGhostSettingsIfNeeded()
@@ -384,8 +423,32 @@ namespace POTCO
 
             settingsDirty = false;
             flickerMultiplier = 1f;
+            flickerTargetMultiplier = 1f;
+            flickerVelocity = 0f;
             flickerTimer = 0f;
             ApplyNow();
+        }
+
+        private void UpdatePeaceFlicker(float deltaTime)
+        {
+            flickerTimer -= deltaTime;
+            if (flickerTimer <= 0f)
+            {
+                flickerTimer = Random.Range(PeaceFlickerMinInterval, PeaceFlickerMaxInterval);
+                flickerTargetMultiplier = Random.Range(PeaceFlickerMinMultiplier, PeaceFlickerMaxMultiplier);
+            }
+
+            float previousMultiplier = flickerMultiplier;
+            flickerMultiplier = Mathf.SmoothDamp(
+                flickerMultiplier,
+                flickerTargetMultiplier,
+                ref flickerVelocity,
+                PeaceFlickerSmoothTime,
+                Mathf.Infinity,
+                deltaTime);
+
+            if (!Mathf.Approximately(previousMultiplier, flickerMultiplier))
+                ApplyBodyMaterialState(ResolveCurrentBodyMaterialColor());
         }
 
         private void RecordAppliedGhostSettings()
@@ -394,6 +457,21 @@ namespace POTCO
             appliedGhostMode = ghostMode;
             appliedBodyColor = bodyColor;
             settingsDirty = false;
+            SyncNpcDataGhostMetadata();
+        }
+
+        private void SyncNpcDataGhostMetadata()
+        {
+            NPCData npcData = GetComponent<NPCData>();
+            if (npcData == null)
+                return;
+
+            npcData.isGhost = true;
+            npcData.ghostColorIndex = ghostColorIndex;
+            npcData.ghostMode = ghostMode;
+            npcData.ghostBodyColor = bodyColor;
+            if (string.IsNullOrEmpty(npcData.ghostEffectSource))
+                npcData.ghostEffectSource = nameof(PotcoGhostEffect);
         }
 
         private static bool Approximately(Color left, Color right)
@@ -404,8 +482,78 @@ namespace POTCO
                    Mathf.Approximately(left.a, right.a);
         }
 
+        private bool ShouldUseGhostAura()
+        {
+            return ghostMode == PeaceGhostMode ||
+                   ghostMode == BattleGhostMode ||
+                   ghostMode == OrbGhostMode;
+        }
+
+        private bool ShouldUseThickAura()
+        {
+            return ghostMode == BattleGhostMode || ghostMode == OrbGhostMode;
+        }
+
+        private bool ShouldUseWideAura()
+        {
+            return ghostMode == BattleGhostMode;
+        }
+
+        private bool ShouldUseOrbAura()
+        {
+            return ghostMode == OrbGhostMode;
+        }
+
+        private bool ShouldUseEyeGlow()
+        {
+            return ghostMode == BattleGhostMode;
+        }
+
+        private int ResolveAuraMaxParticles()
+        {
+            switch (ghostMode)
+            {
+                case PeaceGhostMode:
+                    return PeaceAuraMaxParticles;
+                case BattleGhostMode:
+                    return BattleAuraMaxParticles;
+                case OrbGhostMode:
+                    return OrbAuraMaxParticles;
+                default:
+                    return OrbAuraMaxParticles;
+            }
+        }
+
+        private float ResolveAuraEmissionRate()
+        {
+            switch (ghostMode)
+            {
+                case PeaceGhostMode:
+                    return PeaceAuraEmissionRate;
+                case BattleGhostMode:
+                    return BattleAuraEmissionRate;
+                case OrbGhostMode:
+                    return OrbAuraEmissionRate;
+                default:
+                    return OrbAuraEmissionRate;
+            }
+        }
+
+        private void SetEffectObjectActive(string effectName, bool active)
+        {
+            Transform effectRoot = FindEffectRoot(effectName);
+            if (effectRoot != null && effectRoot.gameObject.activeSelf != active)
+                effectRoot.gameObject.SetActive(active);
+        }
+
         private void EnsureAura()
         {
+            if (!ShouldUseGhostAura())
+            {
+                SetEffectObjectActive(AuraName, false);
+                return;
+            }
+
             Transform existing = transform.Find(AuraName);
             ParticleSystem particles = existing != null ? existing.GetComponent<ParticleSystem>() : null;
             if (particles == null)
@@ -416,6 +564,10 @@ namespace POTCO
                 aura.transform.localRotation = Quaternion.identity;
                 particles = aura.AddComponent<ParticleSystem>();
             }
+            else if (!particles.gameObject.activeSelf)
+            {
+                particles.gameObject.SetActive(true);
+            }
 
             ConfigureAura(particles);
         }
@@ -425,35 +577,42 @@ namespace POTCO
             if (particles == null)
                 return;
 
-            bool thick = ghostMode == 2 || ghostMode == 3 || ghostMode == 4;
-            bool wide = ghostMode == 2;
-            bool orb = ghostMode == 3 || ghostMode == 4;
+            bool thick = ShouldUseThickAura();
+            bool wide = ShouldUseWideAura();
+            bool orb = ShouldUseOrbAura();
+            float minY = orb ? ReferenceOrbAuraMinY : ReferenceAuraMinY;
+            float maxY = ReferenceAuraMaxY;
+            float auraHeight = maxY - minY;
+            float auraCenterY = (minY + maxY) * 0.5f;
+            float auraWidth = wide ? ReferenceWideAuraWidth : ReferenceNormalAuraWidth;
+            float auraAlpha = thick ? ThickAuraAlpha : NormalAuraAlpha;
 
             var main = particles.main;
             main.loop = true;
             main.duration = 1.1f;
-            main.startLifetime = new ParticleSystem.MinMaxCurve(thick ? 1.05f : 0.85f, thick ? 1.8f : 1.35f);
+            main.startLifetime = new ParticleSystem.MinMaxCurve(0.85f, 1.35f);
             main.startSpeed = new ParticleSystem.MinMaxCurve(0.01f, 0.1f);
-            main.startSize = new ParticleSystem.MinMaxCurve(thick ? 1.1f : 0.55f, thick ? 3.85f : 1.55f);
+            main.startSize = new ParticleSystem.MinMaxCurve(2.56f, 6.0f);
             main.startRotation = new ParticleSystem.MinMaxCurve(0f, Mathf.PI * 2f);
-            main.startColor = new ParticleSystem.MinMaxGradient(new Color(bodyColor.r, bodyColor.g, bodyColor.b, thick ? ThickAuraAlpha : NormalAuraAlpha));
-            main.maxParticles = thick ? 108 : 48;
+            Color auraColor = new Color(bodyColor.r, bodyColor.g, bodyColor.b, 1f);
+            main.startColor = new ParticleSystem.MinMaxGradient(auraColor);
+            main.maxParticles = ResolveAuraMaxParticles();
             main.simulationSpace = ParticleSystemSimulationSpace.Local;
 
             var emission = particles.emission;
             emission.enabled = true;
-            emission.rateOverTime = thick ? 90f : 30f;
+            emission.rateOverTime = ResolveAuraEmissionRate();
 
             var shape = particles.shape;
             shape.enabled = true;
             shape.shapeType = ParticleSystemShapeType.Box;
-            shape.scale = new Vector3(wide ? 2.25f : 2.05f, orb ? 5.45f : 5.3f, wide ? 2.25f : 2.05f);
-            shape.position = new Vector3(0f, orb ? 2.8f : 2.65f, 0f);
+            shape.scale = new Vector3(auraWidth, auraHeight, auraWidth);
+            shape.position = new Vector3(0f, auraCenterY, 0f);
 
             var velocity = particles.velocityOverLifetime;
             velocity.enabled = true;
             velocity.space = ParticleSystemSimulationSpace.Local;
-            velocity.y = new ParticleSystem.MinMaxCurve(-0.22f, -0.08f);
+            velocity.y = new ParticleSystem.MinMaxCurve(-0.5f, -0.32f);
 
             var colorOverLifetime = particles.colorOverLifetime;
             colorOverLifetime.enabled = true;
@@ -461,13 +620,13 @@ namespace POTCO
             gradient.SetKeys(
                 new[]
                 {
-                    new GradientColorKey(bodyColor, 0f),
-                    new GradientColorKey(bodyColor, 1f)
+                    new GradientColorKey(auraColor, 0f),
+                    new GradientColorKey(auraColor, 1f)
                 },
                 new[]
                 {
                     new GradientAlphaKey(0f, 0f),
-                    new GradientAlphaKey(thick ? ThickAuraAlpha : NormalAuraAlpha, 0.28f),
+                    new GradientAlphaKey(auraAlpha, 0.28f),
                     new GradientAlphaKey(0f, 1f)
                 });
             colorOverLifetime.color = new ParticleSystem.MinMaxGradient(gradient);
@@ -476,7 +635,7 @@ namespace POTCO
             sizeOverLifetime.enabled = true;
             AnimationCurve sizeCurve = new AnimationCurve(
                 new Keyframe(0f, 1f),
-                new Keyframe(1f, 0.35f));
+                new Keyframe(1f, 0.6f));
             sizeOverLifetime.size = new ParticleSystem.MinMaxCurve(1f, sizeCurve);
 
             ParticleSystemRenderer particleRenderer = particles.GetComponent<ParticleSystemRenderer>();
@@ -484,8 +643,8 @@ namespace POTCO
             particleRenderer.sortingFudge = 1.5f;
             particleRenderer.material = CreateAdditiveEffectMaterial(
                 GetAuraTexture(),
-                new Color(bodyColor.r, bodyColor.g, bodyColor.b, thick ? ThickAuraAlpha : NormalAuraAlpha),
-                (int)RenderQueue.Transparent + 10,
+                auraColor,
+                (int)RenderQueue.Transparent + AuraRenderQueueOffset,
                 GetAuraAlphaTexture());
             particleRenderer.shadowCastingMode = ShadowCastingMode.Off;
             particleRenderer.receiveShadows = false;
@@ -496,6 +655,14 @@ namespace POTCO
 
         private void EnsureGlowShadow()
         {
+            if (!ShouldUseGhostAura())
+            {
+                SetEffectObjectActive(GlowName, false);
+                if (glowRenderer != null && !glowRenderer.gameObject.activeInHierarchy)
+                    glowRenderer = null;
+                return;
+            }
+
             Transform existing = transform.Find(GlowName);
             GameObject glow = existing != null ? existing.gameObject : null;
             if (glow == null)
@@ -507,8 +674,12 @@ namespace POTCO
                 if (collider != null)
                     DestroyImmediateSafe(collider);
             }
+            else if (!glow.activeSelf)
+            {
+                glow.SetActive(true);
+            }
 
-            glow.transform.localPosition = new Vector3(0f, 0.14f, 0f);
+            glow.transform.localPosition = new Vector3(0f, 0.34f, 0f);
             glow.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
             glowBaseScale = Vector3.one * GlowShadowScale;
             glow.transform.localScale = glowBaseScale;
@@ -521,13 +692,24 @@ namespace POTCO
                 GetGlowTexture(),
                 new Color(bodyColor.r, bodyColor.g, bodyColor.b, GlowShadowAlpha),
                 (int)RenderQueue.Transparent - 10,
-                GetGlowAlphaTexture());
+                GetGlowAlphaTexture(),
+                1f,
+                CompareFunction.LessEqual,
+                -2f,
+                -2f);
             glowRenderer.shadowCastingMode = ShadowCastingMode.Off;
             glowRenderer.receiveShadows = false;
         }
 
         private void EnsureEyeGlow()
         {
+            if (!ShouldUseEyeGlow())
+            {
+                RestoreEyeModelTint();
+                SetEffectObjectActive(EyeName, false);
+                return;
+            }
+
             Transform eyes = eyeRoot != null ? eyeRoot : FindEffectRoot(EyeName);
             if (eyes == null)
             {
@@ -541,6 +723,10 @@ namespace POTCO
                 light.intensity = 0.5f;
                 light.range = 0.85f;
                 light.shadows = LightShadows.None;
+            }
+            else if (!eyes.gameObject.activeSelf)
+            {
+                eyes.gameObject.SetActive(true);
             }
 
             eyeRoot = eyes;
@@ -561,6 +747,7 @@ namespace POTCO
                 renderer.receiveShadows = false;
 
                 Material[] sourceMaterials = renderer.sharedMaterials;
+                StoreOriginalEyeState(renderer, sourceMaterials);
                 Material[] eyeMaterials;
                 if (sourceMaterials == null || sourceMaterials.Length == 0)
                 {
@@ -579,6 +766,36 @@ namespace POTCO
                 renderer.sharedMaterials = eyeMaterials;
                 ApplyEyeSurfacePropertyBlock(renderer);
             }
+        }
+
+        private void StoreOriginalEyeState(Renderer renderer, Material[] sourceMaterials)
+        {
+            if (renderer == null || originalEyeMaterials.ContainsKey(renderer))
+                return;
+
+            originalEyeMaterials[renderer] = sourceMaterials != null ? (Material[])sourceMaterials.Clone() : System.Array.Empty<Material>();
+            var originalBlock = new MaterialPropertyBlock();
+            renderer.GetPropertyBlock(originalBlock);
+            originalEyePropertyBlocks[renderer] = originalBlock.isEmpty ? null : originalBlock;
+        }
+
+        private void RestoreEyeModelTint()
+        {
+            foreach (KeyValuePair<Renderer, Material[]> pair in originalEyeMaterials)
+            {
+                Renderer renderer = pair.Key;
+                if (renderer == null)
+                    continue;
+
+                renderer.sharedMaterials = pair.Value;
+                if (originalEyePropertyBlocks.TryGetValue(renderer, out MaterialPropertyBlock block) && block != null)
+                    renderer.SetPropertyBlock(block);
+                else
+                    renderer.SetPropertyBlock(null);
+            }
+
+            originalEyeMaterials.Clear();
+            originalEyePropertyBlocks.Clear();
         }
 
         private static void RemoveLegacyEyeDotQuads(Transform parent)
@@ -665,17 +882,34 @@ namespace POTCO
             return null;
         }
 
-        private static Material CreateAdditiveEffectMaterial(Texture texture, Color color, int renderQueue, Texture alphaTexture = null, float alphaMultiplier = 1f)
+        private static Material CreateAdditiveEffectMaterial(
+            Texture texture,
+            Color color,
+            int renderQueue,
+            Texture alphaTexture = null,
+            float alphaMultiplier = 1f,
+            CompareFunction zTest = CompareFunction.LessEqual,
+            float offsetFactor = 0f,
+            float offsetUnits = 0f)
         {
             Shader shader = Shader.Find("EggImporter/ParticleAdditive")
                 ?? Shader.Find("Legacy Shaders/Particles/Additive")
                 ?? Shader.Find("Particles/Additive")
                 ?? ResolveBodyShader();
             Material material = new Material(shader);
-            return UpdateAdditiveEffectMaterial(material, texture, color, renderQueue, alphaTexture, alphaMultiplier);
+            return UpdateAdditiveEffectMaterial(material, texture, color, renderQueue, alphaTexture, alphaMultiplier, zTest, offsetFactor, offsetUnits);
         }
 
-        private static Material UpdateAdditiveEffectMaterial(Material material, Texture texture, Color color, int renderQueue, Texture alphaTexture = null, float alphaMultiplier = 1f)
+        private static Material UpdateAdditiveEffectMaterial(
+            Material material,
+            Texture texture,
+            Color color,
+            int renderQueue,
+            Texture alphaTexture = null,
+            float alphaMultiplier = 1f,
+            CompareFunction zTest = CompareFunction.LessEqual,
+            float offsetFactor = 0f,
+            float offsetUnits = 0f)
         {
             if (material.HasProperty(MainTexProperty))
                 material.SetTexture(MainTexProperty, texture);
@@ -693,6 +927,12 @@ namespace POTCO
                 material.SetFloat(DstBlendProperty, (float)BlendMode.One);
             if (material.HasProperty(ZWriteProperty))
                 material.SetFloat(ZWriteProperty, 0f);
+            if (material.HasProperty(ZTestProperty))
+                material.SetFloat(ZTestProperty, (float)zTest);
+            if (material.HasProperty(OffsetFactorProperty))
+                material.SetFloat(OffsetFactorProperty, offsetFactor);
+            if (material.HasProperty(OffsetUnitsProperty))
+                material.SetFloat(OffsetUnitsProperty, offsetUnits);
 
             material.renderQueue = renderQueue;
             return material;

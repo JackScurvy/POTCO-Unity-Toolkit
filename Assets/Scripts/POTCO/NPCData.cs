@@ -35,11 +35,15 @@ namespace POTCO
         public string[] enemySkillNames = System.Array.Empty<string>();
         public int[] enemySkillIds = System.Array.Empty<int>();
 
-        [Header("POTCO Ghost")]
+        [HideInInspector]
         public bool isGhost = false;
+        [HideInInspector]
         public int ghostColorIndex = 0;
+        [HideInInspector]
         public int ghostMode = 0;
+        [HideInInspector]
         public Color ghostBodyColor = Color.white;
+        [HideInInspector]
         public string ghostEffectSource = "";
 
         [Header("POTCO Boss")]

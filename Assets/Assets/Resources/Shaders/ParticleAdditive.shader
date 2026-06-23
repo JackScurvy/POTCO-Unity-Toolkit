@@ -7,6 +7,9 @@ Shader "EggImporter/ParticleAdditive"
         _Color ("Tint Color", Color) = (1,1,1,1)
         _Alpha ("Alpha Multiplier", Range(0, 1)) = 1
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 0 // Off
+        [Enum(UnityEngine.Rendering.CompareFunction)] _ZTest ("Z Test", Float) = 4 // LEqual
+        _OffsetFactor ("Depth Offset Factor", Float) = 0
+        _OffsetUnits ("Depth Offset Units", Float) = 0
     }
     SubShader
     {
@@ -15,6 +18,8 @@ Shader "EggImporter/ParticleAdditive"
         
         // Additive Blending
         ZWrite Off
+        ZTest [_ZTest]
+        Offset [_OffsetFactor], [_OffsetUnits]
         Blend SrcAlpha One
         Cull [_Cull]
 
