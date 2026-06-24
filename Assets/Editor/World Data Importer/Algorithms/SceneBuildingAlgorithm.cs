@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using UnityEngine;
 using UnityEditor;
 using WorldDataImporter.Utilities;
@@ -182,6 +183,13 @@ namespace WorldDataImporter.Algorithms
                         }
                     }
 
+                    if (key == "AdditionalData")
+                    {
+                        currentData.additionalData = ParseAdditionalDataList(val, lines, ref lineIndex);
+                        DebugLogger.LogWorldImporter($"Stored AdditionalData for {currentData.id}: {string.Join(", ", currentData.additionalData)}");
+                        continue;
+                    }
+
                     PropertyProcessor.ProcessProperty(key, val, currentGO, root, useEgg, currentData, stats, settings);
 
                     // Check if NPC is ready for spawning after property processing
@@ -220,6 +228,25 @@ namespace WorldDataImporter.Algorithms
                     continue;
                 }
             }
+
+            ProcessAdditionalDataTemplates(
+                path,
+                useEgg,
+                settings,
+                stats,
+                root,
+                createdObjects,
+                objectDataMap,
+                holidayObjectsToDelete,
+                nodeObjectsToDelete,
+                collisionObjectsToDelete,
+                gameAreaObjectsToDelete,
+                npcsToSpawn,
+                npcsSpawnedSet,
+                creaturesToSpawn,
+                creaturesSpawnedSet,
+                enemiesToSpawn,
+                enemiesSpawnedSet);
 
             // Spawn all NPCs after all properties are processed
             if (settings?.importNPCs == true && npcsToSpawn.Count > 0)
@@ -505,6 +532,13 @@ namespace WorldDataImporter.Algorithms
                         }
                     }
 
+                    if (key == "AdditionalData")
+                    {
+                        currentData.additionalData = ParseAdditionalDataList(val, lines, ref lineIndex);
+                        DebugLogger.LogWorldImporter($"Stored AdditionalData for {currentData.id}: {string.Join(", ", currentData.additionalData)}");
+                        continue;
+                    }
+
                     PropertyProcessor.ProcessProperty(key, val, currentGO, root, useEgg, currentData, stats, settings);
 
                     // Check if NPC is ready for spawning after property processing
@@ -541,6 +575,25 @@ namespace WorldDataImporter.Algorithms
                     }
                 }
             }
+
+            ProcessAdditionalDataTemplates(
+                path,
+                useEgg,
+                settings,
+                stats,
+                root,
+                createdObjects,
+                objectDataMap,
+                holidayObjectsToDelete,
+                nodeObjectsToDelete,
+                collisionObjectsToDelete,
+                gameAreaObjectsToDelete,
+                npcsToSpawn,
+                npcsSpawnedSet,
+                creaturesToSpawn,
+                creaturesSpawnedSet,
+                enemiesToSpawn,
+                enemiesSpawnedSet);
 
             // Spawn all NPCs after all properties are processed
             if (settings?.importNPCs == true && npcsToSpawn.Count > 0)
@@ -690,6 +743,364 @@ namespace WorldDataImporter.Algorithms
                     return data.isBoss;
                 default:
                     return false;
+            }
+        }
+
+        private static List<string> ParseAdditionalDataList(string firstValue, string[] lines, ref int lineIndex)
+        {
+            var result = new List<string>();
+            AddQuotedStrings(firstValue, result);
+
+            bool closed = firstValue.Contains("]");
+            while (!closed && lineIndex + 1 < lines.Length)
+            {
+                lineIndex++;
+                string listLine = lines[lineIndex];
+                AddQuotedStrings(listLine, result);
+                closed = listLine.Contains("]");
+            }
+
+            return result;
+        }
+
+        private static void AddQuotedStrings(string value, List<string> result)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return;
+
+            foreach (Match match in Regex.Matches(value, @"'([^']+)'|""([^""]+)"""))
+            {
+                string item = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
+                if (!string.IsNullOrWhiteSpace(item))
+                    result.Add(item);
+            }
+        }
+
+        private static void ProcessAdditionalDataTemplates(
+            string sourcePath,
+            bool useEgg,
+            ImportSettings settings,
+            ImportStatistics stats,
+            GameObject root,
+            Dictionary<string, GameObject> createdObjects,
+            Dictionary<string, ObjectData> objectDataMap,
+            HashSet<GameObject> holidayObjectsToDelete,
+            HashSet<GameObject> nodeObjectsToDelete,
+            HashSet<GameObject> collisionObjectsToDelete,
+            HashSet<GameObject> gameAreaObjectsToDelete,
+            List<(GameObject go, ObjectData data)> npcsToSpawn,
+            HashSet<ObjectData> npcsSpawnedSet,
+            List<(GameObject go, ObjectData data)> creaturesToSpawn,
+            HashSet<ObjectData> creaturesSpawnedSet,
+            List<(GameObject go, ObjectData data)> enemiesToSpawn,
+            HashSet<ObjectData> enemiesSpawnedSet)
+        {
+            var pending = new Queue<ObjectData>(objectDataMap.Values.Where(data => data.additionalData.Count > 0));
+            var processedOwners = new HashSet<ObjectData>();
+            int importCount = 0;
+            const int maxAdditionalDataImports = 2048;
+
+            while (pending.Count > 0)
+            {
+                ObjectData owner = pending.Dequeue();
+                if (owner == null || owner.gameObject == null || !processedOwners.Add(owner))
+                    continue;
+
+                foreach (string templateName in owner.additionalData)
+                {
+                    if (importCount++ >= maxAdditionalDataImports)
+                    {
+                        Debug.LogWarning($"AdditionalData import limit reached while processing {sourcePath}. Possible recursive template reference.");
+                        return;
+                    }
+
+                    string templatePath = ResolveAdditionalDataPath(sourcePath, templateName);
+                    if (string.IsNullOrEmpty(templatePath))
+                    {
+                        Debug.LogWarning($"AdditionalData template '{templateName}' referenced by {owner.id} was not found near {sourcePath}.");
+                        continue;
+                    }
+
+                    List<ObjectData> imported = ParseAdditionalDataTemplateFile(
+                        templatePath,
+                        owner.gameObject,
+                        useEgg,
+                        settings,
+                        stats,
+                        root,
+                        createdObjects,
+                        objectDataMap,
+                        holidayObjectsToDelete,
+                        nodeObjectsToDelete,
+                        collisionObjectsToDelete,
+                        gameAreaObjectsToDelete,
+                        npcsToSpawn,
+                        npcsSpawnedSet,
+                        creaturesToSpawn,
+                        creaturesSpawnedSet,
+                        enemiesToSpawn,
+                        enemiesSpawnedSet);
+
+                    foreach (ObjectData importedData in imported)
+                    {
+                        if (importedData.additionalData.Count > 0)
+                            pending.Enqueue(importedData);
+                    }
+                }
+            }
+        }
+
+        private static string ResolveAdditionalDataPath(string sourcePath, string templateName)
+        {
+            if (string.IsNullOrWhiteSpace(templateName))
+                return null;
+
+            string fileName = templateName.EndsWith(".py", System.StringComparison.OrdinalIgnoreCase)
+                ? templateName
+                : templateName + ".py";
+
+            if (Path.IsPathRooted(fileName))
+                return File.Exists(fileName) ? Path.GetFullPath(fileName) : null;
+
+            foreach (string directory in GetAdditionalDataSearchDirectories(sourcePath))
+            {
+                string candidate = Path.GetFullPath(Path.Combine(directory, fileName));
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<string> GetAdditionalDataSearchDirectories(string sourcePath)
+        {
+            string directory = Path.GetDirectoryName(sourcePath);
+            var yielded = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+
+            while (!string.IsNullOrEmpty(directory))
+            {
+                if (yielded.Add(directory))
+                    yield return directory;
+
+                if (string.Equals(Path.GetFileName(directory), "WorldData", System.StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                directory = Path.GetDirectoryName(directory);
+            }
+        }
+
+        private static List<ObjectData> ParseAdditionalDataTemplateFile(
+            string templatePath,
+            GameObject parent,
+            bool useEgg,
+            ImportSettings settings,
+            ImportStatistics stats,
+            GameObject root,
+            Dictionary<string, GameObject> createdObjects,
+            Dictionary<string, ObjectData> objectDataMap,
+            HashSet<GameObject> holidayObjectsToDelete,
+            HashSet<GameObject> nodeObjectsToDelete,
+            HashSet<GameObject> collisionObjectsToDelete,
+            HashSet<GameObject> gameAreaObjectsToDelete,
+            List<(GameObject go, ObjectData data)> npcsToSpawn,
+            HashSet<ObjectData> npcsSpawnedSet,
+            List<(GameObject go, ObjectData data)> creaturesToSpawn,
+            HashSet<ObjectData> creaturesSpawnedSet,
+            List<(GameObject go, ObjectData data)> enemiesToSpawn,
+            HashSet<ObjectData> enemiesSpawnedSet)
+        {
+            DebugLogger.LogWorldImporter($"Importing AdditionalData template: {templatePath}");
+            string[] lines = File.ReadAllLines(templatePath);
+            var importedData = new List<ObjectData>();
+            var parentStack = new Stack<(GameObject go, ObjectData data, int indent, bool skipProperties)>();
+            var templateRootGO = new GameObject(Path.GetFileNameWithoutExtension(templatePath) + "_AdditionalDataRoot");
+            templateRootGO.transform.SetParent(parent.transform, false);
+            bool consumedTemplateRoot = false;
+
+            for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+            {
+                string line = lines[lineIndex];
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                int indent = 0;
+                while (indent < line.Length && char.IsWhiteSpace(line[indent]))
+                    indent++;
+
+                while (parentStack.Count > 0 && indent <= parentStack.Peek().indent)
+                    parentStack.Pop();
+
+                var current = parentStack.Count > 0 ? parentStack.Peek() : (parent, null, -1, false);
+                GameObject currentGO = current.go;
+                ObjectData currentData = current.data;
+
+                if (ParsingUtilities.IsObjectId(line, out string currentId))
+                {
+                    if (!consumedTemplateRoot)
+                    {
+                        consumedTemplateRoot = true;
+                        var virtualRootData = new ObjectData
+                        {
+                            id = currentId,
+                            gameObject = templateRootGO,
+                            indent = indent
+                        };
+                        parentStack.Push((templateRootGO, virtualRootData, indent, true));
+                        continue;
+                    }
+
+                    var newGO = new GameObject(currentId);
+                    var newData = new ObjectData
+                    {
+                        id = currentId,
+                        gameObject = newGO,
+                        indent = indent
+                    };
+
+                    if (settings != null && settings.importObjectListData)
+                    {
+                        var typeInfo = newGO.AddComponent<ObjectListInfo>();
+                        typeInfo.objectId = currentId;
+                    }
+
+                    createdObjects[currentId] = newGO;
+                    objectDataMap[currentId] = newData;
+                    importedData.Add(newData);
+                    stats.totalObjects++;
+
+                    if (currentGO != null)
+                        newGO.transform.SetParent(currentGO.transform, false);
+
+                    parentStack.Push((newGO, newData, indent, false));
+                    continue;
+                }
+
+                if (ParsingUtilities.IsProperty(line, out string key, out string val) && currentGO != null)
+                {
+                    if (string.IsNullOrWhiteSpace(val) && lineIndex + 1 < lines.Length)
+                    {
+                        string nextLine = lines[lineIndex + 1].Trim();
+                        if (nextLine.StartsWith("'") && nextLine.Contains("'"))
+                        {
+                            val = nextLine;
+                            lineIndex++;
+                            DebugLogger.LogWorldImporter($"Multi-line property detected: {key} = {val}");
+                        }
+                    }
+
+                    if (current.skipProperties)
+                    {
+                        if (key == "AdditionalData")
+                            ParseAdditionalDataList(val, lines, ref lineIndex);
+                        else if (key == "Pos" || key == "Hpr" || key == "Scale")
+                            PropertyProcessor.ProcessProperty(key, val, currentGO, root, useEgg, currentData, null, settings);
+                        continue;
+                    }
+
+                    if (key == "AdditionalData")
+                    {
+                        currentData.additionalData = ParseAdditionalDataList(val, lines, ref lineIndex);
+                        DebugLogger.LogWorldImporter($"Stored AdditionalData for {currentData.id}: {string.Join(", ", currentData.additionalData)}");
+                        continue;
+                    }
+
+                    MarkObjectsForCleanup(key, val, currentGO, root, settings, holidayObjectsToDelete, nodeObjectsToDelete, collisionObjectsToDelete, gameAreaObjectsToDelete);
+                    PropertyProcessor.ProcessProperty(key, val, currentGO, root, useEgg, currentData, stats, settings);
+                    QueueReadySpawns(settings, currentGO, currentData, npcsToSpawn, npcsSpawnedSet, creaturesToSpawn, creaturesSpawnedSet, enemiesToSpawn, enemiesSpawnedSet);
+                }
+            }
+
+            while (templateRootGO.transform.childCount > 0)
+                templateRootGO.transform.GetChild(0).SetParent(parent.transform, true);
+
+            UnityEngine.Object.DestroyImmediate(templateRootGO);
+            return importedData;
+        }
+
+        private static void MarkObjectsForCleanup(
+            string key,
+            string val,
+            GameObject currentGO,
+            GameObject root,
+            ImportSettings settings,
+            HashSet<GameObject> holidayObjectsToDelete,
+            HashSet<GameObject> nodeObjectsToDelete,
+            HashSet<GameObject> collisionObjectsToDelete,
+            HashSet<GameObject> gameAreaObjectsToDelete)
+        {
+            if (settings != null && !settings.importHolidayObjects &&
+                key == "Holiday" && !string.IsNullOrEmpty(val))
+            {
+                string holiday = ParsingUtilities.ExtractStringValue(val);
+                if (!string.IsNullOrEmpty(holiday) && currentGO != root)
+                    holidayObjectsToDelete.Add(currentGO);
+            }
+
+            if (settings != null && !settings.importNodes &&
+                key == "Type" && !string.IsNullOrEmpty(val))
+            {
+                string objectType = ParsingUtilities.ExtractStringValue(val);
+                bool shouldDeleteTownsperson = objectType == "Townsperson" && !settings.importNPCs;
+                if ((objectType.Contains("Node") || shouldDeleteTownsperson) && currentGO != root)
+                    nodeObjectsToDelete.Add(currentGO);
+            }
+
+            if (settings != null && !settings.importCollisions &&
+                key == "Type" && !string.IsNullOrEmpty(val))
+            {
+                string objectType = ParsingUtilities.ExtractStringValue(val);
+                if (objectType.Contains("Collision") && currentGO != root)
+                    collisionObjectsToDelete.Add(currentGO);
+            }
+
+            if (settings != null && settings.skipGameAreasAndTunnels &&
+                key == "Type" && !string.IsNullOrEmpty(val))
+            {
+                string objectType = ParsingUtilities.ExtractStringValue(val);
+                if ((objectType == "Island Game Area" || objectType == "Connector Tunnel") && currentGO != root)
+                    gameAreaObjectsToDelete.Add(currentGO);
+            }
+        }
+
+        private static void QueueReadySpawns(
+            ImportSettings settings,
+            GameObject currentGO,
+            ObjectData currentData,
+            List<(GameObject go, ObjectData data)> npcsToSpawn,
+            HashSet<ObjectData> npcsSpawnedSet,
+            List<(GameObject go, ObjectData data)> creaturesToSpawn,
+            HashSet<ObjectData> creaturesSpawnedSet,
+            List<(GameObject go, ObjectData data)> enemiesToSpawn,
+            HashSet<ObjectData> enemiesSpawnedSet)
+        {
+            if (settings?.importNPCs == true && currentData != null &&
+                currentData.objectType == "Townsperson" &&
+                currentData.isReadyForNPCSpawn &&
+                !npcsSpawnedSet.Contains(currentData))
+            {
+                npcsToSpawn.Add((currentGO, currentData));
+                npcsSpawnedSet.Add(currentData);
+                DebugLogger.LogNPCImport($"Added NPC to spawn queue: {currentData.id}");
+            }
+
+            if (currentData != null &&
+                currentData.objectType == "Animal" &&
+                currentData.isReadyForCreatureSpawn &&
+                !creaturesSpawnedSet.Contains(currentData))
+            {
+                creaturesToSpawn.Add((currentGO, currentData));
+                creaturesSpawnedSet.Add(currentData);
+                DebugLogger.LogWorldImporter($"Added Animal to spawn queue: {currentData.id} ({currentData.species})");
+            }
+
+            if (currentData != null &&
+                ShouldQueueEnemySpawn(currentData) &&
+                currentData.isReadyForEnemySpawn &&
+                !enemiesSpawnedSet.Contains(currentData))
+            {
+                enemiesToSpawn.Add((currentGO, currentData));
+                enemiesSpawnedSet.Add(currentData);
+                DebugLogger.LogWorldImporter($"Added Spawn Node to spawn queue: {currentData.id} ({currentData.spawnables})");
             }
         }
 

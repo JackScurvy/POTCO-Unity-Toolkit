@@ -18,6 +18,7 @@ namespace WorldDataImporter.Data
         public bool isInstanced;
         public string visSize;
         public string visZone;
+        public List<string> additionalData = new List<string>();
         
         // Light properties
         public string lightType;        // AMBIENT, POINT, SPOT
