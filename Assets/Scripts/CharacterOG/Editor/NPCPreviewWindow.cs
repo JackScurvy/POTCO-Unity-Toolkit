@@ -13,6 +13,7 @@ using CharacterOG.Models;
 using CharacterOG.Runtime.Systems;
 using CharacterOG.Runtime.Utils;
 using POTCO.Editor;
+using Player;
 
 namespace CharacterOG.Editor
 {
@@ -958,12 +959,12 @@ namespace CharacterOG.Editor
                 Debug.Log("✅ Added NPCController");
             }
 
-            // Add NPCAnimationPlayer for animation management
-            POTCO.NPCAnimationPlayer npcAnimPlayer = character.GetComponent<POTCO.NPCAnimationPlayer>();
-            if (npcAnimPlayer == null)
+            // Add SimpleAnimationPlayer for animation management
+            SimpleAnimationPlayer animPlayer = character.GetComponent<SimpleAnimationPlayer>();
+            if (animPlayer == null)
             {
-                npcAnimPlayer = character.AddComponent<POTCO.NPCAnimationPlayer>();
-                Debug.Log("✅ Added NPCAnimationPlayer");
+                animPlayer = character.AddComponent<SimpleAnimationPlayer>();
+                Debug.Log("✅ Added SimpleAnimationPlayer");
             }
 
             EditorUtility.SetDirty(character);

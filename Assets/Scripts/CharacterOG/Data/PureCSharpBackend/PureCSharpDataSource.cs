@@ -24,6 +24,7 @@ namespace CharacterOG.Data.PureCSharpBackend
         // Static caches shared across all PureCSharpDataSource instances for performance
         private static Palettes s_cachedPalettes = null;
         private static Dictionary<string, BodyShapeDef> s_cachedBodyShapes = null;
+        private static Dictionary<string, List<string>> s_cachedBodyShapeIndexMaps = null;
         private static Dictionary<string, ClothingCatalog> s_cachedClothingCatalogs = new Dictionary<string, ClothingCatalog>();
         private static Dictionary<string, JewelryTattooDefs> s_cachedJewelryTattoos = new Dictionary<string, JewelryTattooDefs>();
         private static Dictionary<string, FacialMorphDatabase> s_cachedFacialMorphs = new Dictionary<string, FacialMorphDatabase>();
@@ -37,6 +38,7 @@ namespace CharacterOG.Data.PureCSharpBackend
             {
                 s_cachedPalettes = null;
                 s_cachedBodyShapes = null;
+                s_cachedBodyShapeIndexMaps = null;
                 s_cachedClothingCatalogs.Clear();
                 s_cachedJewelryTattoos.Clear();
                 s_cachedFacialMorphs.Clear();
@@ -69,6 +71,7 @@ namespace CharacterOG.Data.PureCSharpBackend
                 if (s_cachedBodyShapes != null)
                 {
                     Debug.Log("[LoadBodyShapes] Using cached body shapes");
+                    CopyCachedBodyShapeIndexMaps();
                     return s_cachedBodyShapes;
                 }
             }
@@ -79,6 +82,7 @@ namespace CharacterOG.Data.PureCSharpBackend
             var data = reader.ParseFile(OgPaths.BodyDefs);
 
             var shapes = new Dictionary<string, BodyShapeDef>();
+            var indexMaps = new Dictionary<string, List<string>>();
 
             // Load MaleBodies and FemaleBodies lists (index → body shape name mapping)
             if (data.TryGetValue("MaleBodies", out var maleBodiesNode) && maleBodiesNode is PyList maleBodiesList)
@@ -89,7 +93,7 @@ namespace CharacterOG.Data.PureCSharpBackend
                     if (item is PyVariable varRef)
                         maleBodyNames.Add(varRef.name);
                 }
-                bodyShapeIndexMaps["m"] = maleBodyNames;
+                indexMaps["m"] = maleBodyNames;
                 Debug.Log($"Loaded MaleBodies mapping: {string.Join(", ", maleBodyNames)}");
             }
 
@@ -101,7 +105,7 @@ namespace CharacterOG.Data.PureCSharpBackend
                     if (item is PyVariable varRef)
                         femaleBodyNames.Add(varRef.name);
                 }
-                bodyShapeIndexMaps["f"] = femaleBodyNames;
+                indexMaps["f"] = femaleBodyNames;
                 Debug.Log($"Loaded FemaleBodies mapping: {string.Join(", ", femaleBodyNames)}");
             }
 
@@ -114,18 +118,51 @@ namespace CharacterOG.Data.PureCSharpBackend
                 }
             }
 
+            bodyShapeIndexMaps = CloneBodyShapeIndexMaps(indexMaps);
+
             // Store in cache
             lock (s_cacheLock)
             {
                 s_cachedBodyShapes = shapes;
+                s_cachedBodyShapeIndexMaps = CloneBodyShapeIndexMaps(indexMaps);
                 Debug.Log($"[LoadBodyShapes] Cached {shapes.Count} body shapes");
             }
 
             return shapes;
         }
 
+        private void EnsureBodyShapeIndexMapsLoaded()
+        {
+            if (bodyShapeIndexMaps.Count > 0)
+                return;
+
+            LoadBodyShapes("m");
+        }
+
+        private void CopyCachedBodyShapeIndexMaps()
+        {
+            if (s_cachedBodyShapeIndexMaps == null || s_cachedBodyShapeIndexMaps.Count == 0)
+                return;
+
+            bodyShapeIndexMaps = CloneBodyShapeIndexMaps(s_cachedBodyShapeIndexMaps);
+        }
+
+        private static Dictionary<string, List<string>> CloneBodyShapeIndexMaps(Dictionary<string, List<string>> source)
+        {
+            var clone = new Dictionary<string, List<string>>();
+            if (source == null)
+                return clone;
+
+            foreach (var kvp in source)
+                clone[kvp.Key] = new List<string>(kvp.Value);
+
+            return clone;
+        }
+
         public string GetBodyShapeNameFromIndex(string gender, int index)
         {
+            EnsureBodyShapeIndexMapsLoaded();
+
             string genderKey = gender.ToLower();
             if (bodyShapeIndexMaps.TryGetValue(genderKey, out var list))
             {
@@ -489,6 +526,8 @@ namespace CharacterOG.Data.PureCSharpBackend
 
         public Dictionary<string, PirateDNA> LoadNpcDna()
         {
+            EnsureBodyShapeIndexMapsLoaded();
+
             // PHASE 1 OPTIMIZATION: Check static cache first
             lock (s_cacheLock)
             {

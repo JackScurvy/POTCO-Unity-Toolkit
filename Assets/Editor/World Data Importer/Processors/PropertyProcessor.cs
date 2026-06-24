@@ -4,6 +4,7 @@ using WorldDataImporter.Data;
 using POTCO;
 using POTCO.Editor;
 using POTCO.Ocean;
+using Player;
 using System.Collections.Generic;
 using System.Linq;
 using DebugLogger = POTCO.Editor.DebugLogger;
@@ -1340,7 +1341,7 @@ namespace WorldDataImporter.Processors
                     DebugLogger.LogNPCImport($"✅ Successfully applied NPC '{pirateDna.name}' ({pirateDna.gender})");
                     DebugLogger.LogNPCImport($"👤 Spawned NPC: {pirateDna.name} (DNA: {objectData.npcDnaId})");
 
-                    // Don't apply animation set - NPCAnimationPlayer will handle it
+                    // Don't apply animation set - SimpleAnimationPlayer will handle it
                     // if (!string.IsNullOrEmpty(objectData.npcAnimSet))
                     // {
                     //     ApplyAnimationSet(instance, objectData.npcAnimSet, pirateDna.gender);
@@ -1367,7 +1368,7 @@ namespace WorldDataImporter.Processors
         }
 
         /// <summary>
-        /// Add NPC AI components (NPCData, CharacterController, NPCController, NPCAnimationPlayer)
+        /// Add NPC AI components (NPCData, CharacterController, NPCController, SimpleAnimationPlayer)
         /// </summary>
         private static void AddNPCComponents(GameObject npcParent, ObjectData objectData)
         {
@@ -1454,11 +1455,11 @@ namespace WorldDataImporter.Processors
                     npcController = npcParent.AddComponent<NPCController>();
                 }
 
-                // Add NPCAnimationPlayer for animation control
-                NPCAnimationPlayer npcAnimPlayer = npcParent.GetComponent<NPCAnimationPlayer>();
-                if (npcAnimPlayer == null)
+                // Add SimpleAnimationPlayer for animation control
+                SimpleAnimationPlayer animPlayer = npcParent.GetComponent<SimpleAnimationPlayer>();
+                if (animPlayer == null)
                 {
-                    npcAnimPlayer = npcParent.AddComponent<NPCAnimationPlayer>();
+                    animPlayer = npcParent.AddComponent<SimpleAnimationPlayer>();
                 }
 
                 DebugLogger.LogNPCImport($"✅ Added NPC AI components to {npcParent.name}");

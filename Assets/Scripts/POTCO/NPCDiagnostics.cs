@@ -1,4 +1,5 @@
 using UnityEngine;
+using Player;
 
 namespace POTCO
 {
@@ -28,12 +29,12 @@ namespace POTCO
             Debug.Log($"--- COMPONENTS ---");
             var npcData = GetComponent<NPCData>();
             var npcController = GetComponent<NPCController>();
-            var npcAnimPlayer = GetComponent<NPCAnimationPlayer>();
+            var npcAnimPlayer = GetComponent<SimpleAnimationPlayer>();
             var charController = GetComponent<CharacterController>();
 
             Debug.Log($"NPCData: {(npcData != null ? "✓" : "✗")}");
             Debug.Log($"NPCController: {(npcController != null ? "✓" : "✗")}");
-            Debug.Log($"NPCAnimationPlayer: {(npcAnimPlayer != null ? "✓" : "✗")}");
+            Debug.Log($"SimpleAnimationPlayer: {(npcAnimPlayer != null ? "✓" : "✗")}");
             Debug.Log($"CharacterController: {(charController != null ? "✓" : "✗")}");
 
             // Check for RuntimeAnimatorPlayer component
@@ -57,7 +58,7 @@ namespace POTCO
             }
 
             // Note: Detailed clip enumeration not available with RuntimeAnimatorPlayer
-            // Use NPCAnimationPlayer inspector to see loaded clips
+            // Use SimpleAnimationPlayer inspector to see loaded clips
 
             // Check hierarchy
             Debug.Log($"--- HIERARCHY ---");

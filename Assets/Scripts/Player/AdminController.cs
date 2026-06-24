@@ -201,14 +201,6 @@ namespace Player
                 Debug.Log($"   Disabled NPCController on {targetNPC.name}");
             }
 
-            // Disable NPC-specific animation systems
-            POTCO.NPCAnimationPlayer npcAnim = targetNPC.GetComponent<POTCO.NPCAnimationPlayer>();
-            if (npcAnim != null)
-            {
-                npcAnim.enabled = false;
-                Debug.Log($"   Disabled NPCAnimationPlayer on {targetNPC.name}");
-            }
-
             // COPY PlayerController from original player (with all settings!)
             PlayerController playerController = targetNPC.GetComponent<PlayerController>();
             if (playerController == null)
@@ -227,52 +219,23 @@ namespace Player
                 Debug.Log($"   Enabled PlayerController on {targetNPC.name}");
             }
 
-            // COPY SimpleAnimationPlayer from original player (with ALL settings like bone reset!)
-            SimpleAnimationPlayer originalSimpleAnim = originalPlayer.GetComponent<SimpleAnimationPlayer>();
+            // Keep the NPC's own animation player so manual clip overrides remain intact.
             SimpleAnimationPlayer simpleAnim = targetNPC.GetComponent<SimpleAnimationPlayer>();
-
-            // Remove existing SimpleAnimationPlayer if it exists (start fresh)
-            if (simpleAnim != null)
+            if (simpleAnim == null)
             {
-                DestroyImmediate(simpleAnim);
-                Debug.Log($"   Removed old SimpleAnimationPlayer from {targetNPC.name}");
+                simpleAnim = targetNPC.AddComponent<SimpleAnimationPlayer>();
+                Debug.Log($"   Added SimpleAnimationPlayer to {targetNPC.name}");
+            }
+            else
+            {
+                simpleAnim.enabled = true;
             }
 
-            // Add fresh SimpleAnimationPlayer and copy everything from player
-            simpleAnim = targetNPC.AddComponent<SimpleAnimationPlayer>();
-            if (originalSimpleAnim != null)
-            {
-                CopyComponentValues(originalSimpleAnim, simpleAnim);
-                Debug.Log($"   Added SimpleAnimationPlayer to {targetNPC.name} (copied settings from player)");
+            CharacterOG.Runtime.CharacterGenderData genderData = targetNPC.GetComponentInChildren<CharacterOG.Runtime.CharacterGenderData>();
+            if (genderData != null)
+                simpleAnim.SetGender(genderData.GetGender());
 
-                // Force Awake() to run
-                System.Reflection.MethodInfo awakeMethod = typeof(SimpleAnimationPlayer).GetMethod("Awake",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                if (awakeMethod != null)
-                {
-                    awakeMethod.Invoke(simpleAnim, null);
-                }
-
-                // Detect NPC's gender and set it BEFORE loading animations
-                CharacterOG.Runtime.CharacterGenderData genderData = targetNPC.GetComponentInChildren<CharacterOG.Runtime.CharacterGenderData>();
-                if (genderData != null)
-                {
-                    string npcGender = genderData.GetGender();
-                    simpleAnim.SetGender(npcGender);
-                }
-
-                // Force Start() to run so it finds the Animation component
-                System.Reflection.MethodInfo startMethod = typeof(SimpleAnimationPlayer).GetMethod("Start",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                if (startMethod != null)
-                {
-                    startMethod.Invoke(simpleAnim, null);
-                    Debug.Log($"   Initialized SimpleAnimationPlayer (Animation component found)");
-                }
-
-                // Copy animation clips with correct gender prefix (uses NPC's gender, not player's)
-                CopyAnimationClipsWithGender(originalSimpleAnim, simpleAnim, targetNPC);
-            }
+            Debug.Log($"   Using SimpleAnimationPlayer on {targetNPC.name}");
 
             // COPY WorldCollisionManager if player has it
             POTCO.WorldCollisionManager originalCollisionManager = originalPlayer.GetComponent<POTCO.WorldCollisionManager>();
@@ -331,12 +294,12 @@ namespace Player
                 Debug.Log($"   Removed PlayerController from {currentlyPossessedNPC.name}");
             }
 
-            // Remove SimpleAnimationPlayer from NPC
+            // Keep SimpleAnimationPlayer on NPC; it owns both NPC and possessed-player animation.
             SimpleAnimationPlayer npcSimpleAnim = currentlyPossessedNPC.GetComponent<SimpleAnimationPlayer>();
             if (npcSimpleAnim != null)
             {
-                Destroy(npcSimpleAnim);
-                Debug.Log($"   Removed SimpleAnimationPlayer from {currentlyPossessedNPC.name}");
+                npcSimpleAnim.enabled = true;
+                Debug.Log($"   Restored SimpleAnimationPlayer on {currentlyPossessedNPC.name}");
             }
 
             // Remove WorldCollisionManager from NPC if it was added
@@ -353,13 +316,6 @@ namespace Player
             {
                 npcController.enabled = true;
                 Debug.Log($"   Re-enabled NPCController on {currentlyPossessedNPC.name}");
-            }
-
-            POTCO.NPCAnimationPlayer npcAnim = currentlyPossessedNPC.GetComponent<POTCO.NPCAnimationPlayer>();
-            if (npcAnim != null)
-            {
-                npcAnim.enabled = true;
-                Debug.Log($"   Re-enabled NPCAnimationPlayer on {currentlyPossessedNPC.name}");
             }
 
             // Return camera to original player
@@ -390,142 +346,6 @@ namespace Player
             // Use JsonUtility to serialize and deserialize component data
             string json = JsonUtility.ToJson(source);
             JsonUtility.FromJsonOverwrite(json, destination);
-        }
-
-        /// <summary>
-        /// Load and add animation clips with correct gender prefix for the NPC
-        /// This ensures female NPCs get fp_ animations and male NPCs get mp_ animations
-        /// </summary>
-        private void CopyAnimationClipsWithGender(SimpleAnimationPlayer source, SimpleAnimationPlayer destination, GameObject targetNPC)
-        {
-            // Get the RuntimeAnimatorPlayer component from destination
-            var animComponentField = typeof(SimpleAnimationPlayer).GetField("animComponent",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-            POTCO.RuntimeAnimatorPlayer destAnimComp = (POTCO.RuntimeAnimatorPlayer)animComponentField.GetValue(destination);
-
-            if (destAnimComp == null)
-            {
-                Debug.LogError("   ❌ RuntimeAnimatorPlayer component not found on destination!");
-                return;
-            }
-
-            // Note: RuntimeAnimatorPlayer doesn't need explicit clip clearing - clips can be replaced dynamically
-
-            // Get NPC's gender prefix
-            var genderPrefixField = typeof(SimpleAnimationPlayer).GetField("genderPrefix",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-            string genderPrefix = (string)genderPrefixField.GetValue(destination);
-
-            // Load gender-specific animations from Resources
-            string[] phases = { "phase_2", "phase_3", "phase_4", "phase_5", "phase_6" };
-            string[] paths = { "char", "models/char" };
-
-            // Get all AnimationClip fields from source to know what animations we need
-            var fields = typeof(SimpleAnimationPlayer).GetFields(
-                System.Reflection.BindingFlags.Instance |
-                System.Reflection.BindingFlags.Public |
-                System.Reflection.BindingFlags.NonPublic
-            );
-
-            int loadedCount = 0;
-            foreach (var field in fields)
-            {
-                if (field.FieldType == typeof(AnimationClip))
-                {
-                    // Get the animation name without gender prefix (e.g., "idle", "walk", "run")
-                    string clipName = GetStandardClipName(field.Name);
-                    // Keep underscores intact! Animation files are named like "fp_walk_back_diagonal_right"
-                    string animName = clipName;
-
-                    // Try to load with gender prefix
-                    AnimationClip loadedClip = LoadAnimationClip(genderPrefix + animName, phases, paths);
-
-                    if (loadedClip != null)
-                    {
-                        // Set the field value
-                        field.SetValue(destination, loadedClip);
-
-                        // Add the gender-specific clip (or replace if exists)
-                        if (!destAnimComp.HasClip(clipName))
-                        {
-                            destAnimComp.AddClip(loadedClip, clipName);
-                            destAnimComp.SetWrapMode(clipName, WrapMode.Loop);
-                        }
-                        loadedCount++;
-                    }
-                    else
-                    {
-                        // Fallback: copy from player if gender-specific version doesn't exist
-                        AnimationClip playerClip = (AnimationClip)field.GetValue(source);
-                        if (playerClip != null)
-                        {
-                            field.SetValue(destination, playerClip);
-                            if (!destAnimComp.HasClip(clipName))
-                            {
-                                destAnimComp.AddClip(playerClip, clipName);
-                                destAnimComp.SetWrapMode(clipName, WrapMode.Loop);
-                                loadedCount++;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Mark as initialized
-            var isInitializedField = typeof(SimpleAnimationPlayer).GetField("isInitialized",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-            if (isInitializedField != null)
-            {
-                isInitializedField.SetValue(destination, true);
-            }
-        }
-
-        /// <summary>
-        /// Load an animation clip from Resources with fallback through multiple phases and paths
-        /// </summary>
-        private AnimationClip LoadAnimationClip(string animName, string[] phases, string[] paths)
-        {
-            foreach (string phase in phases)
-            {
-                foreach (string path in paths)
-                {
-                    string fullPath = $"{phase}/{path}/{animName}";
-                    AnimationClip clip = Resources.Load<AnimationClip>(fullPath);
-                    if (clip != null)
-                    {
-                        return clip;
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Convert field name to standard animation clip name
-        /// e.g., "walkBackDiagonalLeftClip" -> "walk_back_diagonal_left"
-        /// </summary>
-        private string GetStandardClipName(string fieldName)
-        {
-            // Remove "Clip" suffix
-            if (fieldName.EndsWith("Clip"))
-            {
-                fieldName = fieldName.Substring(0, fieldName.Length - 4);
-            }
-
-            // Convert camelCase to snake_case
-            string result = "";
-            for (int i = 0; i < fieldName.Length; i++)
-            {
-                char c = fieldName[i];
-                if (char.IsUpper(c) && i > 0)
-                {
-                    result += "_";
-                }
-                result += char.ToLower(c);
-            }
-
-            return result;
         }
 
         // ========== ADMIN POWERS ==========

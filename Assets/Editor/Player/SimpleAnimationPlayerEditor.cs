@@ -29,7 +29,7 @@ namespace PlayerEditor
         private SerializedProperty spinLeftClipProp;
         private SerializedProperty spinRightClipProp;
         private SerializedProperty jumpClipProp;
-        private SerializedProperty swimClipProp;
+        private SerializedProperty swimWalkClipProp;
 
         private AnimationClip lastPreviewedClip;
 
@@ -53,7 +53,7 @@ namespace PlayerEditor
             spinLeftClipProp = serializedObject.FindProperty("spinLeftClip");
             spinRightClipProp = serializedObject.FindProperty("spinRightClip");
             jumpClipProp = serializedObject.FindProperty("jumpClip");
-            swimClipProp = serializedObject.FindProperty("swimClip");
+            swimWalkClipProp = serializedObject.FindProperty("swimWalkClip");
 
             // Note: Animation preview removed - not compatible with RuntimeAnimatorPlayer
             // Use Animation Window for previewing clips instead
@@ -100,7 +100,7 @@ namespace PlayerEditor
             string[] searchPaths = { "char", "models/char" };
 
             // Auto-fill each animation
-            idleClipProp.objectReferenceValue = FindClip("idle", genderPrefix, phases, searchPaths);
+            idleClipProp.objectReferenceValue = FindClip(SimpleAnimationPlayer.ResolveDefaultIdleAnimationName(genderPrefix), genderPrefix, phases, searchPaths);
             walkClipProp.objectReferenceValue = FindClip("walk", genderPrefix, phases, searchPaths);
             runClipProp.objectReferenceValue = FindClip("run", genderPrefix, phases, searchPaths);
 
@@ -139,7 +139,7 @@ namespace PlayerEditor
             spinRightClipProp.objectReferenceValue = FindClip("spin_right", genderPrefix, phases, searchPaths);
 
             jumpClipProp.objectReferenceValue = FindClip("jump", genderPrefix, phases, searchPaths);
-            swimClipProp.objectReferenceValue = FindClip("swim", genderPrefix, phases, searchPaths);
+            swimWalkClipProp.objectReferenceValue = FindClip("swim", genderPrefix, phases, searchPaths);
 
             serializedObject.ApplyModifiedProperties();
 

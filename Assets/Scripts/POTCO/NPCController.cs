@@ -549,7 +549,7 @@ namespace POTCO
                 currentTurnDirection = 0f;
             }
 
-            // Greeting animation is handled by NPCAnimationPlayer
+            // Greeting animation is handled by SimpleAnimationPlayer
             // This state just ensures the NPC stays facing the player
         }
         #endregion

@@ -19,11 +19,11 @@ namespace Player
         Female
     }
 
-    [RequireComponent(typeof(POTCO.RuntimeAnimatorPlayer))]
     public class SimpleAnimationPlayer : MonoBehaviour
     {
         private static readonly string[] AnimationNameSuffixes = { "", "_mtm", "_msf", "_mtp", "_mmi", "_fsf", "_sp_gp4", "_fr_gp1" };
         private static readonly string[] InMotionAnimationNameSuffixes = { "_mtm", "_msf", "_mtp", "_mmi", "_sp_gp4", "_fr_gp1", "_fsf", "" };
+        private static readonly Dictionary<string, AnimationClip> s_globalClipCache = new Dictionary<string, AnimationClip>();
 
         [Header("Gender Detection")]
         [SerializeField] private bool autoDetectGender = true;
@@ -67,9 +67,26 @@ namespace Player
         [SerializeField] private AnimationClip swimBackDiagonalLeftClip;
         [SerializeField] private AnimationClip swimBackDiagonalRightClip;
 
+        [Header("Manual Animation Overrides")]
+        [Tooltip("When true, clips assigned in the Inspector are kept when entering Play Mode. Only missing clips are auto-loaded.")]
+        [SerializeField] private bool preserveManualAnimationOverrides = true;
+
+        [Header("NPC AnimSet Clips")]
+        [SerializeField] private AnimationClip greetingClip;
+        [SerializeField] private AnimationClip noticeClip;
+        [SerializeField] private AnimationClip noticeClip2;
+        [SerializeField] private AnimationClip animSetIdle;
+        [SerializeField] private AnimationClip animSetIntoLook;
+        [SerializeField] private AnimationClip animSetLookIdle;
+        [SerializeField] private AnimationClip animSetOutofLook;
+
+        [Header("NPC Props")]
+        [SerializeField] private GameObject attachedProp;
+
         private POTCO.RuntimeAnimatorPlayer animComponent;
         private PlayerController playerController;
         private POTCO.NPCController npcController;
+        private POTCO.NPCData npcData;
         private string currentAnim = "";
         private bool isInitialized = false;
         private bool wasGrounded = true; // Track if we were grounded last frame
@@ -92,6 +109,14 @@ namespace Player
         private WrapMode externalAnimationWrapMode = WrapMode.Once;
         private float externalAnimationTransition = 0f;
         private ExternalAnimationRoute externalAnimationRoute = ExternalAnimationRoute.FullBody;
+        private float greetingStartTime = 0f;
+        private bool hasPlayedGreeting = false;
+        private POTCO.NPCController.NPCState previousNpcState = POTCO.NPCController.NPCState.LandRoam;
+        private bool hasPlayedIntoLook = false;
+        private float intoLookStartTime = 0f;
+        private bool isPlayingOutof = false;
+        private float outofStartTime = 0f;
+        private string activeNoticeAnimation = "";
 
         public enum ExternalAnimationRoute
         {
@@ -103,6 +128,10 @@ namespace Player
         {
             playerController = GetComponent<PlayerController>();
             npcController = GetComponent<POTCO.NPCController>();
+            npcData = GetComponent<POTCO.NPCData>();
+
+            if (npcData != null)
+                POTCO.CustomAnimsParser.Initialize();
 
             // Use manual override if enabled
             if (manualGenderOverride)
@@ -208,49 +237,17 @@ namespace Player
             // Find RuntimeAnimatorPlayer component AFTER PlayerController sets up hierarchy
             Debug.Log($"🔍 SimpleAnimationPlayer searching for RuntimeAnimatorPlayer component on {gameObject.name}...");
 
-            // Check Model child first (created by PlayerController or NPCController)
-            Transform modelChild = transform.Find("Model");
-            if (modelChild != null)
+            animComponent = FindPreferredRuntimeAnimatorPlayer(transform, npcData != null, out Transform preferredRoot);
+            if (animComponent != null)
             {
-                Debug.Log($"   Found Model child at: {modelChild.name}");
-
-                // RuntimeAnimatorPlayer might be on Model or on first child of Model
-                animComponent = modelChild.GetComponent<POTCO.RuntimeAnimatorPlayer>();
-                if (animComponent != null)
-                {
-                    Debug.Log($"✅ Found RuntimeAnimatorPlayer component on Model child");
-                }
-                else if (modelChild.childCount > 0)
-                {
-                    animComponent = modelChild.GetChild(0).GetComponent<POTCO.RuntimeAnimatorPlayer>();
-                    if (animComponent != null)
-                    {
-                        Debug.Log($"✅ Found RuntimeAnimatorPlayer component on Model's first child: {animComponent.gameObject.name}");
-                    }
-                }
-            }
-            else
-            {
-                Debug.Log("   No Model child found");
-            }
-
-            // If not found, check this object
-            if (animComponent == null)
-            {
-                animComponent = GetComponent<POTCO.RuntimeAnimatorPlayer>();
-            }
-
-            // If still not found, search all children
-            if (animComponent == null)
-            {
-                animComponent = GetComponentInChildren<POTCO.RuntimeAnimatorPlayer>();
+                Debug.Log($"✅ Found RuntimeAnimatorPlayer component on {animComponent.gameObject.name}");
             }
 
             // If still not found, create it
             if (animComponent == null)
             {
                 Debug.LogWarning($"RuntimeAnimatorPlayer not found on {gameObject.name}, creating one...");
-                GameObject target = modelChild != null && modelChild.childCount > 0 ? modelChild.GetChild(0).gameObject : gameObject;
+                GameObject target = preferredRoot != null ? preferredRoot.gameObject : gameObject;
                 animComponent = target.AddComponent<POTCO.RuntimeAnimatorPlayer>();
                 animComponent.Initialize();
             }
@@ -332,10 +329,21 @@ namespace Player
                 }
             }
 
-            UpdateAnimation(controller);
+            if (ShouldUseNpcStateAnimations())
+                UpdateNpcAnimation();
+            else
+                UpdateAnimation(controller);
 
             // Note: Jump ping-pong looping removed - Playables API handles this differently
             // Jump animation now plays through once and holds at end frame
+        }
+
+        private bool ShouldUseNpcStateAnimations()
+        {
+            return npcData != null &&
+                   npcController != null &&
+                   npcController.enabled &&
+                   (playerController == null || !playerController.enabled);
         }
 
         private void DetectGender()
@@ -343,7 +351,7 @@ namespace Player
             Debug.Log("🔍 Starting gender detection...");
 
             // Method 0: Check for CharacterGenderData component (highest priority)
-            CharacterOG.Runtime.CharacterGenderData genderData = GetComponent<CharacterOG.Runtime.CharacterGenderData>();
+            CharacterOG.Runtime.CharacterGenderData genderData = GetComponentInChildren<CharacterOG.Runtime.CharacterGenderData>();
             if (genderData != null)
             {
                 string gender = genderData.GetGender();
@@ -474,250 +482,337 @@ namespace Player
         {
             Debug.Log($"🔍 Loading animations with prefix: {genderPrefix}");
 
-            // Search all phase directories
             string[] phases = { "phase_2", "phase_3", "phase_4", "phase_5", "phase_6" };
             string[] searchPaths = { "char", "models/char" };
+            string customModelPrefix = npcData != null ? GetCustomModelPrefix() : null;
 
-            // Only auto-load if not manually assigned in Inspector
-            if (idleClip == null)
+            if (!string.IsNullOrEmpty(customModelPrefix))
+                Debug.Log($"Detected custom animation model prefix: {customModelPrefix}");
+
+            if (ShouldLoadAnimationClip(idleClip))
             {
-                idleClip = FindAndLoadClip("idle", phases, searchPaths);
+                string idleAnimName = npcData != null ? "idle" : ResolveDefaultIdleAnimationName(genderPrefix);
+                idleClip = FindAndLoadClip(idleAnimName, phases, searchPaths, customModelPrefix);
             }
             else
             {
                 Debug.Log($"✅ Using manually assigned idle clip: {idleClip.name}");
             }
 
-            if (walkClip == null)
+            if (ShouldLoadAnimationClip(walkClip))
             {
-                walkClip = FindAndLoadClip("walk", phases, searchPaths);
+                walkClip = FindAndLoadClip("walk", phases, searchPaths, customModelPrefix);
             }
             else
             {
                 Debug.Log($"✅ Using manually assigned walk clip: {walkClip.name}");
             }
 
-            if (runClip == null)
+            if (ShouldLoadAnimationClip(runClip))
             {
-                runClip = FindAndLoadClip("run", phases, searchPaths);
+                runClip = FindAndLoadClip("run", phases, searchPaths, customModelPrefix);
             }
             else
             {
                 Debug.Log($"✅ Using manually assigned run clip: {runClip.name}");
             }
 
-            // Load directional animations (try multiple naming conventions)
-            if (walkBackClip == null)
+            if (ShouldLoadAnimationClip(walkBackClip))
             {
-                walkBackClip = FindAndLoadClip("walk_back", phases, searchPaths);
-                if (walkBackClip == null) walkBackClip = FindAndLoadClip("walk_backward", phases, searchPaths);
-                if (walkBackClip == null) walkBackClip = FindAndLoadClip("walkback", phases, searchPaths);
+                walkBackClip = FindAndLoadClip("walk_back", phases, searchPaths, customModelPrefix);
+                if (walkBackClip == null) walkBackClip = FindAndLoadClip("walk_backward", phases, searchPaths, customModelPrefix);
+                if (walkBackClip == null) walkBackClip = FindAndLoadClip("walkback", phases, searchPaths, customModelPrefix);
             }
 
-            if (runBackClip == null)
+            if (ShouldLoadAnimationClip(runBackClip))
             {
-                runBackClip = FindAndLoadClip("run_back", phases, searchPaths);
-                if (runBackClip == null) runBackClip = FindAndLoadClip("run_backward", phases, searchPaths);
-                if (runBackClip == null) runBackClip = FindAndLoadClip("runback", phases, searchPaths);
+                runBackClip = FindAndLoadClip("run_back", phases, searchPaths, customModelPrefix);
+                if (runBackClip == null) runBackClip = FindAndLoadClip("run_backward", phases, searchPaths, customModelPrefix);
+                if (runBackClip == null) runBackClip = FindAndLoadClip("runback", phases, searchPaths, customModelPrefix);
             }
 
-            if (strafeLeftClip == null)
+            if (ShouldLoadAnimationClip(strafeLeftClip))
             {
-                strafeLeftClip = FindAndLoadClip("strafe_left", phases, searchPaths);
-                if (strafeLeftClip == null) strafeLeftClip = FindAndLoadClip("walk_left", phases, searchPaths);
-                if (strafeLeftClip == null) strafeLeftClip = FindAndLoadClip("strafeleft", phases, searchPaths);
+                strafeLeftClip = FindAndLoadClip("strafe_left", phases, searchPaths, customModelPrefix);
+                if (strafeLeftClip == null) strafeLeftClip = FindAndLoadClip("walk_left", phases, searchPaths, customModelPrefix);
+                if (strafeLeftClip == null) strafeLeftClip = FindAndLoadClip("strafeleft", phases, searchPaths, customModelPrefix);
             }
 
-            if (strafeRightClip == null)
+            if (ShouldLoadAnimationClip(strafeRightClip))
             {
-                strafeRightClip = FindAndLoadClip("strafe_right", phases, searchPaths);
-                if (strafeRightClip == null) strafeRightClip = FindAndLoadClip("walk_right", phases, searchPaths);
-                if (strafeRightClip == null) strafeRightClip = FindAndLoadClip("straferight", phases, searchPaths);
+                strafeRightClip = FindAndLoadClip("strafe_right", phases, searchPaths, customModelPrefix);
+                if (strafeRightClip == null) strafeRightClip = FindAndLoadClip("walk_right", phases, searchPaths, customModelPrefix);
+                if (strafeRightClip == null) strafeRightClip = FindAndLoadClip("straferight", phases, searchPaths, customModelPrefix);
             }
 
-            if (runDiagonalLeftClip == null) runDiagonalLeftClip = FindAndLoadClip("run_diagonal_left", phases, searchPaths);
-            if (runDiagonalRightClip == null) runDiagonalRightClip = FindAndLoadClip("run_diagonal_right", phases, searchPaths);
-            if (walkBackDiagonalLeftClip == null) walkBackDiagonalLeftClip = FindAndLoadClip("walk_back_diagonal_left", phases, searchPaths);
-            if (walkBackDiagonalRightClip == null) walkBackDiagonalRightClip = FindAndLoadClip("walk_back_diagonal_right", phases, searchPaths);
+            if (ShouldLoadAnimationClip(runDiagonalLeftClip)) runDiagonalLeftClip = FindAndLoadClip("run_diagonal_left", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(runDiagonalRightClip)) runDiagonalRightClip = FindAndLoadClip("run_diagonal_right", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(walkBackDiagonalLeftClip)) walkBackDiagonalLeftClip = FindAndLoadClip("walk_back_diagonal_left", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(walkBackDiagonalRightClip)) walkBackDiagonalRightClip = FindAndLoadClip("walk_back_diagonal_right", phases, searchPaths, customModelPrefix);
 
-            if (turnLeftClip == null) turnLeftClip = FindAndLoadClip("turn_left", phases, searchPaths);
-            if (turnRightClip == null) turnRightClip = FindAndLoadClip("turn_right", phases, searchPaths);
+            if (ShouldLoadAnimationClip(turnLeftClip)) turnLeftClip = FindAndLoadClip("turn_left", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(turnRightClip)) turnRightClip = FindAndLoadClip("turn_right", phases, searchPaths, customModelPrefix);
 
-            if (spinLeftClip == null) spinLeftClip = FindAndLoadClip("spin_left", phases, searchPaths);
-            if (spinRightClip == null) spinRightClip = FindAndLoadClip("spin_right", phases, searchPaths);
+            if (ShouldLoadAnimationClip(spinLeftClip)) spinLeftClip = FindAndLoadClip("spin_left", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(spinRightClip)) spinRightClip = FindAndLoadClip("spin_right", phases, searchPaths, customModelPrefix);
 
-            if (jumpClip == null) jumpClip = FindAndLoadClip("jump", phases, searchPaths);
+            if (ShouldLoadAnimationClip(jumpClip)) jumpClip = FindAndLoadClip("jump", phases, searchPaths, customModelPrefix);
 
-            // Swimming
-            if (swimIdleClip == null) swimIdleClip = FindAndLoadClip("tread_water", phases, searchPaths);
-            if (swimWalkClip == null) swimWalkClip = FindAndLoadClip("swim", phases, searchPaths);
-            if (swimBackClip == null) swimBackClip = FindAndLoadClip("swim_back", phases, searchPaths);
-            if (swimLeftClip == null) swimLeftClip = FindAndLoadClip("swim_left", phases, searchPaths);
-            if (swimRightClip == null) swimRightClip = FindAndLoadClip("swim_right", phases, searchPaths);
-            if (swimLeftDiagonalClip == null) swimLeftDiagonalClip = FindAndLoadClip("swim_left_diagonal", phases, searchPaths);
-            if (swimRightDiagonalClip == null) swimRightDiagonalClip = FindAndLoadClip("swim_right_diagonal", phases, searchPaths);
-            if (swimBackDiagonalLeftClip == null) swimBackDiagonalLeftClip = FindAndLoadClip("swim_back_diagonal_left", phases, searchPaths);
-            if (swimBackDiagonalRightClip == null) swimBackDiagonalRightClip = FindAndLoadClip("swim_back_diagonal_right", phases, searchPaths);
+            if (ShouldLoadAnimationClip(swimIdleClip)) swimIdleClip = FindAndLoadClip("tread_water", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(swimWalkClip)) swimWalkClip = FindAndLoadClip("swim", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(swimBackClip)) swimBackClip = FindAndLoadClip("swim_back", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(swimLeftClip)) swimLeftClip = FindAndLoadClip("swim_left", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(swimRightClip)) swimRightClip = FindAndLoadClip("swim_right", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(swimLeftDiagonalClip)) swimLeftDiagonalClip = FindAndLoadClip("swim_left_diagonal", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(swimRightDiagonalClip)) swimRightDiagonalClip = FindAndLoadClip("swim_right_diagonal", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(swimBackDiagonalLeftClip)) swimBackDiagonalLeftClip = FindAndLoadClip("swim_back_diagonal_left", phases, searchPaths, customModelPrefix);
+            if (ShouldLoadAnimationClip(swimBackDiagonalRightClip)) swimBackDiagonalRightClip = FindAndLoadClip("swim_back_diagonal_right", phases, searchPaths, customModelPrefix);
 
-            // Add clips to RuntimeAnimatorPlayer and set wrap modes
-            if (idleClip != null)
-            {
-                Debug.Log($"➕ Adding idle clip to RuntimeAnimatorPlayer: {idleClip.name}");
-                animComponent.AddClip(idleClip, "idle");
-                animComponent.SetWrapMode("idle", WrapMode.Loop);
-            }
-            else
-            {
-                Debug.LogError("❌ No idle clip available to add!");
-            }
-            if (walkClip != null)
-            {
-                animComponent.AddClip(walkClip, "walk");
-                animComponent.SetWrapMode("walk", WrapMode.Loop);
-            }
-            if (runClip != null)
-            {
-                animComponent.AddClip(runClip, "run");
-                animComponent.SetWrapMode("run", WrapMode.Loop);
-            }
-            if (walkBackClip != null)
-            {
-                animComponent.AddClip(walkBackClip, "walk_back");
-                animComponent.SetWrapMode("walk_back", WrapMode.Loop);
-            }
-            if (runBackClip != null)
-            {
-                animComponent.AddClip(runBackClip, "run_back");
-                animComponent.SetWrapMode("run_back", WrapMode.Loop);
-            }
-            if (strafeLeftClip != null)
-            {
-                animComponent.AddClip(strafeLeftClip, "strafe_left");
-                animComponent.SetWrapMode("strafe_left", WrapMode.Loop);
-            }
-            if (strafeRightClip != null)
-            {
-                animComponent.AddClip(strafeRightClip, "strafe_right");
-                animComponent.SetWrapMode("strafe_right", WrapMode.Loop);
-            }
-            if (runDiagonalLeftClip != null)
-            {
-                animComponent.AddClip(runDiagonalLeftClip, "run_diagonal_left");
-                animComponent.SetWrapMode("run_diagonal_left", WrapMode.Loop);
-            }
-            if (runDiagonalRightClip != null)
-            {
-                animComponent.AddClip(runDiagonalRightClip, "run_diagonal_right");
-                animComponent.SetWrapMode("run_diagonal_right", WrapMode.Loop);
-            }
-            if (walkBackDiagonalLeftClip != null)
-            {
-                animComponent.AddClip(walkBackDiagonalLeftClip, "walk_back_diagonal_left");
-                animComponent.SetWrapMode("walk_back_diagonal_left", WrapMode.Loop);
-            }
-            if (walkBackDiagonalRightClip != null)
-            {
-                animComponent.AddClip(walkBackDiagonalRightClip, "walk_back_diagonal_right");
-                animComponent.SetWrapMode("walk_back_diagonal_right", WrapMode.Loop);
-            }
-            if (turnLeftClip != null)
-            {
-                animComponent.AddClip(turnLeftClip, "turn_left");
-                animComponent.SetWrapMode("turn_left", WrapMode.Loop);
-            }
-            if (turnRightClip != null)
-            {
-                animComponent.AddClip(turnRightClip, "turn_right");
-                animComponent.SetWrapMode("turn_right", WrapMode.Loop);
-            }
-            if (spinLeftClip != null)
-            {
-                animComponent.AddClip(spinLeftClip, "spin_left");
-                animComponent.SetWrapMode("spin_left", WrapMode.Loop);
-            }
-            if (spinRightClip != null)
-            {
-                animComponent.AddClip(spinRightClip, "spin_right");
-                animComponent.SetWrapMode("spin_right", WrapMode.Loop);
-            }
-            if (jumpClip != null)
-            {
-                animComponent.AddClip(jumpClip, "jump");
-                animComponent.SetWrapMode("jump", WrapMode.ClampForever);
-            }
+            LoadNpcAnimationSet(phases, searchPaths, customModelPrefix);
 
-            // Swimming Registration
-            if (swimIdleClip != null)
-            {
-                animComponent.AddClip(swimIdleClip, "swim_idle");
-                animComponent.SetWrapMode("swim_idle", WrapMode.Loop);
-            }
-            if (swimWalkClip != null)
-            {
-                animComponent.AddClip(swimWalkClip, "swim_walk");
-                animComponent.SetWrapMode("swim_walk", WrapMode.Loop);
-            }
-            if (swimBackClip != null)
-            {
-                animComponent.AddClip(swimBackClip, "swim_back");
-                animComponent.SetWrapMode("swim_back", WrapMode.Loop);
-            }
-            if (swimLeftClip != null)
-            {
-                animComponent.AddClip(swimLeftClip, "swim_left");
-                animComponent.SetWrapMode("swim_left", WrapMode.Loop);
-            }
-            if (swimRightClip != null)
-            {
-                animComponent.AddClip(swimRightClip, "swim_right");
-                animComponent.SetWrapMode("swim_right", WrapMode.Loop);
-            }
-            if (swimLeftDiagonalClip != null)
-            {
-                animComponent.AddClip(swimLeftDiagonalClip, "swim_left_diagonal");
-                animComponent.SetWrapMode("swim_left_diagonal", WrapMode.Loop);
-            }
-            if (swimRightDiagonalClip != null)
-            {
-                animComponent.AddClip(swimRightDiagonalClip, "swim_right_diagonal");
-                animComponent.SetWrapMode("swim_right_diagonal", WrapMode.Loop);
-            }
-            if (swimBackDiagonalLeftClip != null)
-            {
-                animComponent.AddClip(swimBackDiagonalLeftClip, "swim_back_diagonal_left");
-                animComponent.SetWrapMode("swim_back_diagonal_left", WrapMode.Loop);
-            }
-            if (swimBackDiagonalRightClip != null)
-            {
-                animComponent.AddClip(swimBackDiagonalRightClip, "swim_back_diagonal_right");
-                animComponent.SetWrapMode("swim_back_diagonal_right", WrapMode.Loop);
-            }
+            RegisterClip(idleClip, "idle", WrapMode.Loop);
+            RegisterClip(walkClip, "walk", WrapMode.Loop);
+            RegisterClip(runClip, "run", WrapMode.Loop);
+            RegisterClip(walkBackClip, "walk_back", WrapMode.Loop);
+            RegisterClip(runBackClip, "run_back", WrapMode.Loop);
+            RegisterClip(strafeLeftClip, "strafe_left", WrapMode.Loop);
+            RegisterClip(strafeRightClip, "strafe_right", WrapMode.Loop);
+            RegisterClip(runDiagonalLeftClip, "run_diagonal_left", WrapMode.Loop);
+            RegisterClip(runDiagonalRightClip, "run_diagonal_right", WrapMode.Loop);
+            RegisterClip(walkBackDiagonalLeftClip, "walk_back_diagonal_left", WrapMode.Loop);
+            RegisterClip(walkBackDiagonalRightClip, "walk_back_diagonal_right", WrapMode.Loop);
+            RegisterClip(turnLeftClip, "turn_left", WrapMode.Loop);
+            RegisterClip(turnRightClip, "turn_right", WrapMode.Loop);
+            RegisterClip(spinLeftClip, "spin_left", WrapMode.Loop);
+            RegisterClip(spinRightClip, "spin_right", WrapMode.Loop);
+            RegisterClip(jumpClip, "jump", WrapMode.ClampForever);
 
-            // Check if we have minimum required animations
-            if (idleClip != null && walkClip != null)
+            RegisterClip(swimIdleClip, "swim_idle", WrapMode.Loop);
+            RegisterClip(swimWalkClip, "swim_walk", WrapMode.Loop);
+            RegisterClip(swimBackClip, "swim_back", WrapMode.Loop);
+            RegisterClip(swimLeftClip, "swim_left", WrapMode.Loop);
+            RegisterClip(swimRightClip, "swim_right", WrapMode.Loop);
+            RegisterClip(swimLeftDiagonalClip, "swim_left_diagonal", WrapMode.Loop);
+            RegisterClip(swimRightDiagonalClip, "swim_right_diagonal", WrapMode.Loop);
+            RegisterClip(swimBackDiagonalLeftClip, "swim_back_diagonal_left", WrapMode.Loop);
+            RegisterClip(swimBackDiagonalRightClip, "swim_back_diagonal_right", WrapMode.Loop);
+
+            RegisterClip(animSetIdle, "animset_idle", WrapMode.Loop);
+            RegisterClip(animSetIntoLook, "animset_into_look", WrapMode.Once);
+            RegisterClip(animSetLookIdle, "animset_look_idle", WrapMode.Loop);
+            RegisterClip(animSetOutofLook, "animset_outof_look", WrapMode.Once);
+            RegisterClip(greetingClip, "greeting", WrapMode.Once);
+            RegisterClip(noticeClip, "notice", WrapMode.Once);
+            RegisterClip(noticeClip2, "notice_2", WrapMode.Once);
+
+            bool hasAnimSet = animSetIdle != null || animSetIntoLook != null || animSetLookIdle != null || animSetOutofLook != null;
+            bool hasRequiredAnimations = npcData != null ? (idleClip != null || hasAnimSet) : (idleClip != null && walkClip != null);
+            if (hasRequiredAnimations)
             {
                 isInitialized = true;
-                PlayAnimation("idle");
+                PlayAnimation(npcData != null ? GetIdleAnimation() : "idle");
             }
             else
             {
-                Debug.LogError($"❌ Failed to load required animations! Check that {genderPrefix}idle and {genderPrefix}walk exist in Resources/phase_*/char/");
+                string requiredIdle = npcData != null ? "idle" : ResolveDefaultIdleAnimationName(genderPrefix);
+                Debug.LogError($"❌ Failed to load required animations! Check that {genderPrefix}{requiredIdle} and {genderPrefix}walk exist in Resources/phase_*/char/");
                 isInitialized = false;
             }
         }
 
-        private AnimationClip FindAndLoadClip(string animName, string[] phases, string[] searchPaths)
+        public static POTCO.RuntimeAnimatorPlayer FindPreferredRuntimeAnimatorPlayer(Transform root, bool preferChildModel, out Transform preferredRoot)
         {
-            // Try with gender prefix first
-            string prefixedName = genderPrefix + animName;
+            preferredRoot = ResolvePreferredAnimatorRoot(root, preferChildModel);
+            if (preferredRoot == null)
+                return null;
 
+            POTCO.RuntimeAnimatorPlayer preferred = preferredRoot.GetComponent<POTCO.RuntimeAnimatorPlayer>();
+            if (preferred != null)
+                return preferred;
+
+            if (preferChildModel)
+            {
+                POTCO.RuntimeAnimatorPlayer childAnimator = preferredRoot.GetComponentInChildren<POTCO.RuntimeAnimatorPlayer>();
+                if (childAnimator != null && childAnimator.transform != root)
+                    return childAnimator;
+
+                if (preferredRoot != root)
+                    return null;
+            }
+
+            return root != null ? root.GetComponent<POTCO.RuntimeAnimatorPlayer>() : null;
+        }
+
+        private static Transform ResolvePreferredAnimatorRoot(Transform root, bool preferChildModel)
+        {
+            if (root == null)
+                return null;
+
+            Transform modelChild = root.Find("Model");
+            if (modelChild != null)
+            {
+                if (modelChild.childCount > 0)
+                    return modelChild.GetChild(0);
+
+                return modelChild;
+            }
+
+            if (preferChildModel && root.childCount > 0)
+                return root.GetChild(0);
+
+            return root;
+        }
+
+        private bool ShouldLoadAnimationClip(AnimationClip clip)
+        {
+            return clip == null || !preserveManualAnimationOverrides;
+        }
+
+        public static bool ShouldPreserveManualAnimationOverride(AnimationClip clip, bool preserveManualOverrides)
+        {
+            return clip != null && preserveManualOverrides;
+        }
+
+        private void RegisterClip(AnimationClip clip, string clipName, WrapMode wrapMode)
+        {
+            if (clip == null || animComponent == null)
+                return;
+
+            animComponent.AddClip(clip, clipName);
+            animComponent.SetWrapMode(clipName, wrapMode);
+        }
+
+        private void LoadNpcAnimationSet(string[] phases, string[] searchPaths, string customModelPrefix)
+        {
+            if (npcData == null)
+                return;
+
+            string effectiveGreetingAnimation = npcData.greetingAnimation ?? "";
+            string effectiveNoticeAnimation1 = npcData.noticeAnimation1 ?? "";
+            string effectiveNoticeAnimation2 = npcData.noticeAnimation2 ?? "";
+
+            if (!string.IsNullOrEmpty(npcData.animSet) && npcData.animSet != "default")
+            {
+                CustomAnimData animData = CustomAnimsParser.GetAnimSet(npcData.animSet);
+                if (animData != null)
+                {
+                    if (animData.idles.Count > 0 && ShouldLoadAnimationClip(animSetIdle))
+                        animSetIdle = FindAndLoadClip(animData.idles[0], phases, searchPaths, customModelPrefix);
+
+                    if (animData.interactInto.Count > 0 && ShouldLoadAnimationClip(animSetIntoLook))
+                        animSetIntoLook = FindAndLoadClip(animData.interactInto[0], phases, searchPaths, customModelPrefix);
+
+                    if (animData.interact.Count > 0 && ShouldLoadAnimationClip(animSetLookIdle))
+                        animSetLookIdle = FindAndLoadClip(animData.interact[0], phases, searchPaths, customModelPrefix);
+
+                    if (animData.interactOutof.Count > 0 && ShouldLoadAnimationClip(animSetOutofLook))
+                        animSetOutofLook = FindAndLoadClip(animData.interactOutof[0], phases, searchPaths, customModelPrefix);
+
+                    if (animData.noticeIdle.Count > 0 && ShouldLoadAnimationClip(animSetLookIdle))
+                    {
+                        AnimationClip noticeIdleClip = FindAndLoadClip(animData.noticeIdle[0], phases, searchPaths, customModelPrefix);
+                        if (noticeIdleClip != null)
+                            animSetLookIdle = noticeIdleClip;
+                    }
+
+                    if (animData.notice1.Count > 0)
+                        effectiveNoticeAnimation1 = animData.notice1[0];
+                    if (animData.notice2.Count > 0)
+                        effectiveNoticeAnimation2 = animData.notice2[0];
+                    if (animData.greeting.Count > 0)
+                        effectiveGreetingAnimation = animData.greeting[0];
+
+                    if (animData.props.Count > 0 && attachedProp == null)
+                        AttachProp(animData.props[0]);
+                }
+                else
+                {
+                    Debug.LogWarning($"AnimSet '{npcData.animSet}' not found in CustomAnims.py");
+                }
+            }
+
+            if (ShouldLoadAnimationClip(greetingClip) && !string.IsNullOrEmpty(effectiveGreetingAnimation))
+                greetingClip = FindAndLoadClip(effectiveGreetingAnimation, phases, searchPaths, customModelPrefix);
+
+            if (ShouldLoadAnimationClip(noticeClip) && !string.IsNullOrEmpty(effectiveNoticeAnimation1))
+                noticeClip = FindAndLoadClip(effectiveNoticeAnimation1, phases, searchPaths, customModelPrefix);
+
+            if (ShouldLoadAnimationClip(noticeClip2) && !string.IsNullOrEmpty(effectiveNoticeAnimation2))
+                noticeClip2 = FindAndLoadClip(effectiveNoticeAnimation2, phases, searchPaths, customModelPrefix);
+
+            npcData.greetingAnimation = effectiveGreetingAnimation;
+            npcData.noticeAnimation1 = effectiveNoticeAnimation1;
+            npcData.noticeAnimation2 = effectiveNoticeAnimation2;
+
+            if (animSetIdle != null || animSetIntoLook != null || animSetLookIdle != null || animSetOutofLook != null)
+                npcData.isStationary = true;
+        }
+
+        public static string ResolveDefaultIdleAnimationName(string genderPrefix)
+        {
+            return string.Equals(genderPrefix, "mp_", System.StringComparison.Ordinal) ? "idle_centered" : "idle";
+        }
+
+        private AnimationClip FindAndLoadClip(string animName, string[] phases, string[] searchPaths, string customModelPrefix = null)
+        {
+            string customKey = !string.IsNullOrEmpty(customModelPrefix) ? $"CUSTOM_{customModelPrefix}_{animName}" : null;
+            string genderKey = $"{genderPrefix}{animName}";
+            string genericKey = animName;
+            string skeletonStyle = null;
+            if (npcData != null && npcData.enemyKind == PotcoEnemyKind.Skeleton)
+                skeletonStyle = string.IsNullOrEmpty(npcData.enemyBipedAnimStyle) ? npcData.animSet : npcData.enemyBipedAnimStyle;
+            string skeletonKey = !string.IsNullOrEmpty(skeletonStyle) ? $"SKELETON_{skeletonStyle}_{animName}" : null;
+
+            if (skeletonKey != null && s_globalClipCache.TryGetValue(skeletonKey, out AnimationClip cachedSkeleton)) return cachedSkeleton;
+            if (customKey != null && s_globalClipCache.TryGetValue(customKey, out AnimationClip cachedCustom)) return cachedCustom;
+            if (s_globalClipCache.TryGetValue(genderKey, out AnimationClip cachedGender)) return cachedGender;
+            if (s_globalClipCache.TryGetValue(genericKey, out AnimationClip cachedGeneric)) return cachedGeneric;
+
+            if (skeletonKey != null)
+            {
+                foreach (string fullPath in PotcoBipedAnimationResolver.BuildResourceCandidates(animName, skeletonStyle))
+                {
+                    AnimationClip clip = Resources.Load<AnimationClip>(fullPath);
+                    if (clip != null)
+                    {
+                        s_globalClipCache[skeletonKey] = clip;
+                        return clip;
+                    }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(customModelPrefix))
+            {
+                string customPrefixedName = $"{customModelPrefix}_{animName}";
+                foreach (string phase in phases)
+                {
+                    foreach (string path in searchPaths)
+                    {
+                        string fullPath = $"{phase}/{path}/{customPrefixedName}";
+                        AnimationClip clip = Resources.Load<AnimationClip>(fullPath);
+                        if (clip != null)
+                        {
+                            s_globalClipCache[customKey] = clip;
+                            return clip;
+                        }
+                    }
+                }
+            }
+
+            string prefixedName = genderPrefix + animName;
             AnimationClip prefixedVariant = FindAndLoadClipVariant(prefixedName, phases, searchPaths, "Loaded");
             if (prefixedVariant != null)
+            {
+                s_globalClipCache[genderKey] = prefixedVariant;
                 return prefixedVariant;
+            }
 
             AnimationClip unprefixedVariant = FindAndLoadClipVariant(animName, phases, searchPaths, "Loaded (no prefix)");
             if (unprefixedVariant != null)
+            {
+                s_globalClipCache[genericKey] = unprefixedVariant;
                 return unprefixedVariant;
+            }
 
             foreach (string phase in phases)
             {
@@ -729,6 +824,7 @@ namespace Player
                     if (clip != null)
                     {
                         Debug.Log($"✅ Loaded: {fullPath}");
+                        s_globalClipCache[genderKey] = clip;
                         return clip;
                     }
                 }
@@ -745,6 +841,7 @@ namespace Player
                     if (clip != null)
                     {
                         Debug.Log($"✅ Loaded (no prefix): {fullPath}");
+                        s_globalClipCache[genericKey] = clip;
                         return clip;
                     }
                 }
@@ -1039,6 +1136,217 @@ namespace Player
             // Track state for next frame
             wasGrounded = controller.IsGrounded;
             wasFalling = controller.IsFalling;
+        }
+
+        private void UpdateNpcAnimation()
+        {
+            string targetAnim = GetIdleAnimation();
+            NPCController.NPCState currentState = npcController.CurrentState;
+
+            bool justEnteredNotice = previousNpcState == NPCController.NPCState.LandRoam && currentState == NPCController.NPCState.Notice;
+            bool justLeftNotice = previousNpcState == NPCController.NPCState.Notice && currentState == NPCController.NPCState.LandRoam;
+
+            switch (currentState)
+            {
+                case NPCController.NPCState.LandRoam:
+                    if (npcController.CurrentSpeed > 0.5f && walkClip != null)
+                    {
+                        targetAnim = "walk";
+                        hasPlayedGreeting = false;
+                        hasPlayedIntoLook = false;
+                        isPlayingOutof = false;
+                        activeNoticeAnimation = "";
+                    }
+                    else if (justLeftNotice && animSetOutofLook != null)
+                    {
+                        targetAnim = "animset_outof_look";
+                        hasPlayedIntoLook = false;
+                        isPlayingOutof = true;
+                        outofStartTime = Time.time;
+                    }
+                    else if (isPlayingOutof && animSetOutofLook != null)
+                    {
+                        if (Time.time - outofStartTime >= animSetOutofLook.length)
+                        {
+                            targetAnim = GetIdleAnimation();
+                            isPlayingOutof = false;
+                        }
+                        else
+                        {
+                            targetAnim = "animset_outof_look";
+                        }
+                    }
+                    else
+                    {
+                        targetAnim = GetIdleAnimation();
+                        isPlayingOutof = false;
+                    }
+
+                    if (npcController.CurrentSpeed <= 0.5f)
+                    {
+                        hasPlayedGreeting = false;
+                        activeNoticeAnimation = "";
+                    }
+                    break;
+
+                case NPCController.NPCState.Notice:
+                    if (!TryResolveNpcSpinAnimation(out targetAnim))
+                    {
+                        if (justEnteredNotice && animSetIntoLook != null && !hasPlayedIntoLook)
+                        {
+                            targetAnim = "animset_into_look";
+                            hasPlayedIntoLook = true;
+                            intoLookStartTime = Time.time;
+                        }
+                        else if (hasPlayedIntoLook && animSetIntoLook != null)
+                        {
+                            targetAnim = Time.time - intoLookStartTime >= animSetIntoLook.length && animSetLookIdle != null
+                                ? "animset_look_idle"
+                                : "animset_into_look";
+                        }
+                        else if (animSetLookIdle != null)
+                        {
+                            targetAnim = "animset_look_idle";
+                        }
+                        else if (HasNoticeAnimation())
+                        {
+                            targetAnim = GetNoticeAnimation();
+                        }
+                        else
+                        {
+                            targetAnim = GetIdleAnimation();
+                        }
+                    }
+                    break;
+
+                case NPCController.NPCState.Greeting:
+                    if (!TryResolveNpcSpinAnimation(out targetAnim))
+                    {
+                        if (greetingClip != null && !hasPlayedGreeting)
+                        {
+                            targetAnim = "greeting";
+                            hasPlayedGreeting = true;
+                            greetingStartTime = Time.time;
+                        }
+                        else if (hasPlayedGreeting && greetingClip != null)
+                        {
+                            targetAnim = Time.time - greetingStartTime >= greetingClip.length
+                                ? (animSetLookIdle != null ? "animset_look_idle" : GetIdleAnimation())
+                                : "greeting";
+                        }
+                        else
+                        {
+                            targetAnim = animSetLookIdle != null ? "animset_look_idle" : GetIdleAnimation();
+                        }
+                    }
+                    break;
+            }
+
+            previousNpcState = currentState;
+
+            if (targetAnim != currentAnim)
+                PlayAnimation(targetAnim);
+        }
+
+        private bool TryResolveNpcSpinAnimation(out string targetAnim)
+        {
+            if (npcController.TurnDirection > 0 && spinRightClip != null)
+            {
+                targetAnim = "spin_right";
+                return true;
+            }
+
+            if (npcController.TurnDirection < 0 && spinLeftClip != null)
+            {
+                targetAnim = "spin_left";
+                return true;
+            }
+
+            targetAnim = "";
+            return false;
+        }
+
+        private string GetIdleAnimation()
+        {
+            return animSetIdle != null ? "animset_idle" : "idle";
+        }
+
+        private bool HasNoticeAnimation()
+        {
+            return noticeClip != null || noticeClip2 != null;
+        }
+
+        private string GetNoticeAnimation()
+        {
+            if (!string.IsNullOrEmpty(activeNoticeAnimation))
+                return activeNoticeAnimation;
+
+            if (noticeClip != null && noticeClip2 != null)
+                activeNoticeAnimation = Random.value < 0.5f ? "notice" : "notice_2";
+            else
+                activeNoticeAnimation = noticeClip != null ? "notice" : "notice_2";
+
+            return activeNoticeAnimation;
+        }
+
+        private string GetCustomModelPrefix()
+        {
+            Transform[] allChildren = GetComponentsInChildren<Transform>();
+            foreach (Transform child in allChildren)
+            {
+                string childName = child.name.ToLower();
+                if (!childName.Contains("_"))
+                    continue;
+
+                string[] parts = childName.Split('_');
+                if (parts.Length >= 2 && int.TryParse(parts[1], out _))
+                    return parts[0];
+            }
+
+            return null;
+        }
+
+        private void AttachProp(PropData propData)
+        {
+            Transform weaponRight = FindWeaponRightJoint();
+            if (weaponRight == null)
+                return;
+
+            GameObject propPrefab = FindAndLoadProp(propData.modelPath);
+            if (propPrefab == null)
+                return;
+
+            attachedProp = Instantiate(propPrefab, weaponRight);
+            attachedProp.transform.localPosition = Vector3.zero;
+            attachedProp.transform.localRotation = Quaternion.identity;
+            attachedProp.transform.localScale = Vector3.one;
+            attachedProp.name = $"Prop_{propData.modelPath.Substring(propData.modelPath.LastIndexOf('/') + 1)}";
+        }
+
+        private GameObject FindAndLoadProp(string propPath)
+        {
+            string[] phases = { "phase_2", "phase_3", "phase_4", "phase_5", "phase_6" };
+            foreach (string phase in phases)
+            {
+                GameObject propPrefab = Resources.Load<GameObject>($"{phase}/{propPath}");
+                if (propPrefab != null)
+                    return propPrefab;
+            }
+
+            return Resources.Load<GameObject>(propPath);
+        }
+
+        private Transform FindWeaponRightJoint()
+        {
+            Transform[] allTransforms = GetComponentsInChildren<Transform>(true);
+            foreach (Transform transformToCheck in allTransforms)
+            {
+                string lowerName = transformToCheck.name.ToLower();
+                if (lowerName == "weapon_right" || lowerName == "weaponright")
+                    return transformToCheck;
+            }
+
+            return null;
         }
 
         private string ApplyWeaponAnimationOverride(string targetAnim, ControllerAdapter controller)

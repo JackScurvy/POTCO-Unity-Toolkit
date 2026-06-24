@@ -2,6 +2,7 @@ using UnityEngine;
 using System.Collections.Generic;
 using System;
 using POTCO.Combat;
+using Player;
 
 namespace POTCO
 {
@@ -588,8 +589,8 @@ namespace POTCO
             EnablePatrol(npcController);
             npcController.enabled = true;
 
-            if (variant.Kind != PotcoEnemyKind.Creature && enemyRoot.GetComponent<NPCAnimationPlayer>() == null)
-                enemyRoot.AddComponent<NPCAnimationPlayer>();
+            if (variant.Kind != PotcoEnemyKind.Creature && enemyRoot.GetComponent<SimpleAnimationPlayer>() == null)
+                enemyRoot.AddComponent<SimpleAnimationPlayer>();
 
             PotcoEnemyCombatLoadout loadout = enemyRoot.GetComponent<PotcoEnemyCombatLoadout>();
             if (loadout == null)

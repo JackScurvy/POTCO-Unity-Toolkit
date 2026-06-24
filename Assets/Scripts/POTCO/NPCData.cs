@@ -64,7 +64,7 @@ namespace POTCO
         public string noticeAnimation1 = "";     // Notice Animation 1
         public string noticeAnimation2 = "";     // Notice Animation 2
 
-        [Header("Runtime Flags (Set by NPCAnimationPlayer)")]
+        [Header("Runtime Flags (Set by SimpleAnimationPlayer)")]
         [Tooltip("If true, this NPC has contextual animations and should stay locked in place")]
         public bool isStationary = false;        // Set to true if NPC has look variations
     }
