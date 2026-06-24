@@ -19,6 +19,13 @@ namespace WorldDataImporter.Data
         public string visSize;
         public string visZone;
         public List<string> additionalData = new List<string>();
+        public VisualModelData visualModel;
+        public List<VisualModelData> subObjVisuals = new List<VisualModelData>();
+        public GameObject primaryVisualInstance;
+        public int processedSubObjVisualCount;
+        public bool usesCombinedAnimatedTreeModel;
+        public string animatedTreeTrunkSelector;
+        public string animatedTreeLeafSelector;
         
         // Light properties
         public string lightType;        // AMBIENT, POINT, SPOT
@@ -70,6 +77,18 @@ namespace WorldDataImporter.Data
         public float? spawnTimeEnd;     // Spawn time end (in hours)
         public string team;             // Team (default, Villager, etc.)
         public bool isReadyForEnemySpawn; // Track if all Spawn Node properties are loaded
+    }
+
+    public class VisualModelData
+    {
+        public string modelPath;
+        public string animatePath;
+        public string partName;
+        public string holiday;
+        public string visSize;
+        public List<string> attach = new List<string>();
+        public Vector3? scale;
+        public Color? color;
     }
     
     [System.Serializable]

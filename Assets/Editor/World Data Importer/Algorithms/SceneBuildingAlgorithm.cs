@@ -190,6 +190,9 @@ namespace WorldDataImporter.Algorithms
                         continue;
                     }
 
+                    if (TryProcessStructuredVisualProperty(key, val, lines, ref lineIndex, currentGO, root, useEgg, currentData, stats, settings))
+                        continue;
+
                     PropertyProcessor.ProcessProperty(key, val, currentGO, root, useEgg, currentData, stats, settings);
 
                     // Check if NPC is ready for spawning after property processing
@@ -539,6 +542,9 @@ namespace WorldDataImporter.Algorithms
                         continue;
                     }
 
+                    if (TryProcessStructuredVisualProperty(key, val, lines, ref lineIndex, currentGO, root, useEgg, currentData, stats, settings))
+                        continue;
+
                     PropertyProcessor.ProcessProperty(key, val, currentGO, root, useEgg, currentData, stats, settings);
 
                     // Check if NPC is ready for spawning after property processing
@@ -776,6 +782,592 @@ namespace WorldDataImporter.Algorithms
             }
         }
 
+        private static bool TryProcessStructuredVisualProperty(
+            string key,
+            string val,
+            string[] lines,
+            ref int lineIndex,
+            GameObject currentGO,
+            GameObject root,
+            bool useEgg,
+            ObjectData currentData,
+            ImportStatistics stats,
+            ImportSettings settings)
+        {
+            if (currentData == null || currentGO == null || string.IsNullOrEmpty(val) || !val.Contains("{"))
+                return false;
+
+            if (key == "Visual")
+            {
+                List<string> blockLines = CollectDictionaryBlock(lines, ref lineIndex);
+                VisualModelData visual = ParseVisualBlock(blockLines);
+                currentData.visualModel = visual;
+
+                if (string.IsNullOrEmpty(visual.modelPath))
+                {
+                    if (visual.color.HasValue)
+                    {
+                        currentData.visualColor = visual.color.Value;
+                        ApplyStructuredVisualColor(currentGO, root, currentData, stats, settings);
+                    }
+                }
+                else
+                {
+                    if (!TryInstantiateCombinedAnimatedTreeModel(currentGO, root, useEgg, currentData, visual, stats, settings))
+                    {
+                        currentData.primaryVisualInstance = InstantiateStructuredVisualModel(
+                            visual,
+                            currentGO,
+                            currentGO,
+                            root,
+                            useEgg,
+                            currentData,
+                            stats,
+                            settings,
+                            updateObjectListInfo: true);
+
+                        ProcessQueuedSubObjVisuals(currentGO, root, useEgg, currentData, stats, settings);
+                    }
+                }
+
+                return true;
+            }
+
+            if (key == "SubObjs")
+            {
+                List<string> blockLines = CollectDictionaryBlock(lines, ref lineIndex);
+                currentData.subObjVisuals.AddRange(ParseSubObjVisualBlocks(blockLines));
+                ProcessQueuedSubObjVisuals(currentGO, root, useEgg, currentData, stats, settings);
+                return true;
+            }
+
+            return false;
+        }
+
+        private static List<string> CollectDictionaryBlock(string[] lines, ref int lineIndex)
+        {
+            var blockLines = new List<string>();
+            int depth = 0;
+            bool started = false;
+
+            for (int i = lineIndex; i < lines.Length; i++)
+            {
+                string blockLine = lines[i];
+                blockLines.Add(blockLine);
+
+                depth += CountChar(blockLine, '{');
+                if (blockLine.Contains("{"))
+                    started = true;
+
+                depth -= CountChar(blockLine, '}');
+                if (started && depth <= 0)
+                {
+                    lineIndex = i;
+                    break;
+                }
+            }
+
+            return blockLines;
+        }
+
+        private static int CountChar(string value, char target)
+        {
+            int count = 0;
+            for (int i = 0; i < value.Length; i++)
+            {
+                if (value[i] == target)
+                    count++;
+            }
+
+            return count;
+        }
+
+        private static List<VisualModelData> ParseSubObjVisualBlocks(List<string> blockLines)
+        {
+            var visuals = new List<VisualModelData>();
+            string[] blockArray = blockLines.ToArray();
+
+            for (int i = 0; i < blockArray.Length; i++)
+            {
+                if (!ParsingUtilities.IsProperty(blockArray[i], out string key, out string val))
+                    continue;
+
+                if (key != "Visual" || string.IsNullOrEmpty(val) || !val.Contains("{"))
+                    continue;
+
+                int visualIndex = i;
+                List<string> visualLines = CollectDictionaryBlock(blockArray, ref visualIndex);
+                VisualModelData visual = ParseVisualBlock(visualLines);
+                if (!string.IsNullOrEmpty(visual.modelPath))
+                    visuals.Add(visual);
+
+                i = visualIndex;
+            }
+
+            return visuals;
+        }
+
+        private static VisualModelData ParseVisualBlock(List<string> blockLines)
+        {
+            var visual = new VisualModelData();
+            string[] blockArray = blockLines.ToArray();
+
+            for (int i = 0; i < blockArray.Length; i++)
+            {
+                if (!ParsingUtilities.IsProperty(blockArray[i], out string key, out string val))
+                    continue;
+
+                switch (key)
+                {
+                    case "Model":
+                        visual.modelPath = ExtractFirstQuotedString(val);
+                        break;
+                    case "Animate":
+                        visual.animatePath = ExtractFirstQuotedString(val);
+                        break;
+                    case "PartName":
+                        visual.partName = ExtractFirstQuotedString(val);
+                        break;
+                    case "Holiday":
+                        visual.holiday = ExtractFirstQuotedString(val);
+                        break;
+                    case "VisSize":
+                        visual.visSize = ExtractFirstQuotedString(val);
+                        break;
+                    case "Attach":
+                        visual.attach = ParseAdditionalDataList(val, blockArray, ref i);
+                        break;
+                    case "Scale":
+                        visual.scale = ParsingUtilities.ParseVector3(val, Vector3.one);
+                        break;
+                    case "Color":
+                        if (ParsingUtilities.ParseColor(val, out Color color))
+                            visual.color = color;
+                        break;
+                }
+            }
+
+            return visual;
+        }
+
+        private static string ExtractFirstQuotedString(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            Match match = Regex.Match(value, @"'([^']*)'|""([^""]*)""");
+            if (!match.Success)
+                return string.Empty;
+
+            return match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
+        }
+
+        private static void ProcessQueuedSubObjVisuals(
+            GameObject ownerGO,
+            GameObject root,
+            bool useEgg,
+            ObjectData ownerData,
+            ImportStatistics stats,
+            ImportSettings settings)
+        {
+            if (ownerData == null || ownerData.primaryVisualInstance == null)
+                return;
+
+            if (ownerData.usesCombinedAnimatedTreeModel)
+            {
+                UpdateAnimatedTreeLeafSelector(ownerData);
+                ApplyAnimatedTreePartVisibility(ownerData.primaryVisualInstance, ownerData.animatedTreeTrunkSelector, ownerData.animatedTreeLeafSelector);
+                ownerData.processedSubObjVisualCount = ownerData.subObjVisuals.Count;
+                return;
+            }
+
+            while (ownerData.processedSubObjVisualCount < ownerData.subObjVisuals.Count)
+            {
+                VisualModelData subObjVisual = ownerData.subObjVisuals[ownerData.processedSubObjVisualCount];
+                Transform attachParent = ResolveSubObjAttachParent(ownerGO.transform, ownerData.primaryVisualInstance.transform, subObjVisual);
+
+                InstantiateStructuredVisualModel(
+                    subObjVisual,
+                    attachParent.gameObject,
+                    ownerGO,
+                    root,
+                    useEgg,
+                    ownerData,
+                    stats,
+                    settings,
+                    updateObjectListInfo: false);
+
+                ownerData.processedSubObjVisualCount++;
+            }
+        }
+
+        private static Transform ResolveSubObjAttachParent(Transform owner, Transform primaryVisual, VisualModelData visual)
+        {
+            string partName = visual.attach.Count > 0 ? visual.attach[0] : visual.partName;
+            string attachName = visual.attach.Count > 1 ? visual.attach[1] : null;
+
+            if (!string.IsNullOrEmpty(attachName))
+            {
+                Transform attach = FindChildRecursive(primaryVisual, attachName, allowContains: false)
+                    ?? FindChildRecursive(owner, attachName, allowContains: false);
+                if (attach != null)
+                    return attach;
+            }
+
+            if (!string.IsNullOrEmpty(partName))
+            {
+                Transform part = FindChildRecursive(primaryVisual, partName, allowContains: false)
+                    ?? FindChildRecursive(primaryVisual, partName, allowContains: true);
+                if (part != null)
+                    return part;
+            }
+
+            return primaryVisual;
+        }
+
+        private static bool TryInstantiateCombinedAnimatedTreeModel(
+            GameObject ownerGO,
+            GameObject root,
+            bool useEgg,
+            ObjectData ownerData,
+            VisualModelData sourceVisual,
+            ImportStatistics stats,
+            ImportSettings settings)
+        {
+            if (ownerData == null || ownerData.objectType != "Tree - Animated" || sourceVisual == null)
+                return false;
+
+            if (!TryGetAnimatedTreeModelRoot(sourceVisual.modelPath, out string modelRoot, out string trunkSelector))
+                return false;
+
+            ownerData.usesCombinedAnimatedTreeModel = true;
+            ownerData.animatedTreeTrunkSelector = trunkSelector;
+            UpdateAnimatedTreeLeafSelector(ownerData);
+
+            var combinedVisual = new VisualModelData
+            {
+                modelPath = modelRoot + "_hi",
+                animatePath = modelRoot + "_idle",
+                partName = sourceVisual.partName,
+                holiday = sourceVisual.holiday,
+                visSize = sourceVisual.visSize,
+                scale = sourceVisual.scale,
+                color = sourceVisual.color
+            };
+
+            ownerData.primaryVisualInstance = InstantiateStructuredVisualModel(
+                combinedVisual,
+                ownerGO,
+                ownerGO,
+                root,
+                useEgg,
+                ownerData,
+                stats,
+                settings,
+                updateObjectListInfo: false);
+
+            if (ownerData.primaryVisualInstance == null)
+                return true;
+
+            if (settings != null && settings.importObjectListData)
+            {
+                var typeInfo = ownerGO.GetComponent<ObjectListInfo>();
+                if (typeInfo != null)
+                {
+                    typeInfo.modelPath = sourceVisual.modelPath;
+                    typeInfo.hasVisualBlock = true;
+                }
+            }
+
+            ApplyAnimatedTreePartVisibility(ownerData.primaryVisualInstance, ownerData.animatedTreeTrunkSelector, ownerData.animatedTreeLeafSelector);
+            ProcessQueuedSubObjVisuals(ownerGO, root, useEgg, ownerData, stats, settings);
+            return true;
+        }
+
+        private static bool TryGetAnimatedTreeModelRoot(string modelPath, out string modelRoot, out string trunkSelector)
+        {
+            modelRoot = null;
+            trunkSelector = null;
+
+            if (string.IsNullOrEmpty(modelPath))
+                return false;
+
+            Match typedTrunk = Regex.Match(modelPath, @"^(.*)_trunk_([A-Za-z])_.*$");
+            if (typedTrunk.Success)
+            {
+                modelRoot = typedTrunk.Groups[1].Value;
+                trunkSelector = "trunk_" + typedTrunk.Groups[2].Value;
+                return true;
+            }
+
+            Match plainTrunk = Regex.Match(modelPath, @"^(.*)_trunk_hi$");
+            if (plainTrunk.Success)
+            {
+                modelRoot = plainTrunk.Groups[1].Value;
+                trunkSelector = "trunk";
+                return true;
+            }
+
+            return false;
+        }
+
+        private static void UpdateAnimatedTreeLeafSelector(ObjectData ownerData)
+        {
+            if (ownerData == null || !string.IsNullOrEmpty(ownerData.animatedTreeLeafSelector))
+                return;
+
+            foreach (VisualModelData subObjVisual in ownerData.subObjVisuals)
+            {
+                if (TryGetAnimatedTreeLeafSelector(subObjVisual.modelPath, out string leafSelector))
+                {
+                    ownerData.animatedTreeLeafSelector = leafSelector;
+                    return;
+                }
+            }
+        }
+
+        private static bool TryGetAnimatedTreeLeafSelector(string modelPath, out string leafSelector)
+        {
+            leafSelector = null;
+
+            if (string.IsNullOrEmpty(modelPath))
+                return false;
+
+            Match typedLeaf = Regex.Match(modelPath, @".*leaf_([A-Za-z]).*");
+            if (typedLeaf.Success)
+            {
+                leafSelector = "leaf_" + typedLeaf.Groups[1].Value;
+                return true;
+            }
+
+            if (Regex.IsMatch(modelPath, @".*_leaf_hi$"))
+            {
+                leafSelector = "leaf";
+                return true;
+            }
+
+            return false;
+        }
+
+        private static void ApplyAnimatedTreePartVisibility(GameObject treeInstance, string trunkSelector, string leafSelector)
+        {
+            if (treeInstance == null)
+                return;
+
+            Renderer[] renderers = treeInstance.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0)
+                return;
+
+            var matches = new Dictionary<Renderer, bool>();
+            bool foundSelectableRenderer = false;
+
+            foreach (Renderer renderer in renderers)
+            {
+                string path = GetTransformPath(renderer.transform, treeInstance.transform).ToLowerInvariant();
+                bool isSelectedPart =
+                    (!string.IsNullOrEmpty(trunkSelector) && path.Contains(trunkSelector.ToLowerInvariant())) ||
+                    (!string.IsNullOrEmpty(leafSelector) && path.Contains(leafSelector.ToLowerInvariant()));
+
+                matches[renderer] = isSelectedPart;
+                if (isSelectedPart)
+                    foundSelectableRenderer = true;
+            }
+
+            if (!foundSelectableRenderer)
+                return;
+
+            foreach (var match in matches)
+                match.Key.enabled = match.Value;
+        }
+
+        private static string GetTransformPath(Transform transform, Transform root)
+        {
+            var names = new List<string>();
+            Transform current = transform;
+            while (current != null)
+            {
+                names.Add(current.name);
+                if (current == root)
+                    break;
+
+                current = current.parent;
+            }
+
+            names.Reverse();
+            return string.Join("/", names);
+        }
+
+        private static Transform FindChildRecursive(Transform parent, string childName, bool allowContains)
+        {
+            if (parent == null || string.IsNullOrEmpty(childName))
+                return null;
+
+            foreach (Transform child in parent)
+            {
+                bool matches = allowContains
+                    ? child.name.Contains(childName)
+                    : child.name == childName;
+                if (matches)
+                    return child;
+
+                Transform nested = FindChildRecursive(child, childName, allowContains);
+                if (nested != null)
+                    return nested;
+            }
+
+            return null;
+        }
+
+        private static GameObject InstantiateStructuredVisualModel(
+            VisualModelData visual,
+            GameObject parentGO,
+            GameObject ownerGO,
+            GameObject root,
+            bool useEgg,
+            ObjectData ownerData,
+            ImportStatistics stats,
+            ImportSettings settings,
+            bool updateObjectListInfo)
+        {
+            if (visual == null || string.IsNullOrEmpty(visual.modelPath) || parentGO == null)
+                return null;
+
+            if (settings != null && !settings.importHolidayObjects && visual.modelPath.Contains("_hol_"))
+                return null;
+
+            if (ownerData != null && ownerData.objectType == "Spawn Node")
+                return null;
+
+            GameObject instance = AssetUtilities.InstantiatePrefab(visual.modelPath, parentGO, useEgg, stats);
+            if (instance == null)
+                return null;
+
+            instance.transform.localPosition = Vector3.zero;
+            instance.transform.localRotation = Quaternion.identity;
+            if (visual.scale.HasValue)
+                instance.transform.localScale = visual.scale.Value;
+            else
+                instance.transform.localScale = Vector3.one;
+
+            if (updateObjectListInfo && settings != null && settings.importObjectListData)
+            {
+                var typeInfo = ownerGO.GetComponent<ObjectListInfo>();
+                if (typeInfo != null)
+                {
+                    typeInfo.modelPath = visual.modelPath;
+                    typeInfo.hasVisualBlock = true;
+                }
+            }
+
+            if (settings?.importCollisions == false)
+                AssetUtilities.RemoveCollisions(instance, stats);
+            else if (ownerData != null && ownerData.disableCollision.HasValue && ownerData.disableCollision.Value)
+                AssetUtilities.SetCollisionEnabled(instance, false, stats);
+
+            if (visual.color.HasValue && ownerData != null)
+            {
+                ownerData.visualColor = visual.color.Value;
+                ApplyStructuredVisualColor(ownerGO, root, ownerData, stats, settings);
+            }
+
+            ApplyStructuredVisualAnimation(instance, visual);
+
+            return instance;
+        }
+
+        private static void ApplyStructuredVisualAnimation(GameObject instance, VisualModelData visual)
+        {
+            if (instance == null || visual == null || string.IsNullOrEmpty(visual.animatePath))
+                return;
+
+            AnimationClip clip = LoadStructuredVisualAnimationClip(visual.animatePath);
+            if (clip == null)
+            {
+                DebugLogger.LogWarningWorldImporter($"Animation clip not found for Visual.Animate: '{visual.animatePath}'");
+                return;
+            }
+
+            RuntimeAnimatorPlayer animator = instance.GetComponent<RuntimeAnimatorPlayer>();
+            if (animator == null)
+                animator = instance.AddComponent<RuntimeAnimatorPlayer>();
+
+            animator.Initialize();
+
+            string clipName = Path.GetFileName(visual.animatePath);
+            animator.AddClip(clip, clipName);
+            animator.SetWrapMode(clipName, WrapMode.Loop);
+            animator.Play(clipName);
+        }
+
+        private static AnimationClip LoadStructuredVisualAnimationClip(string animationPath)
+        {
+            AnimationClip directClip = Resources.Load<AnimationClip>(animationPath);
+            if (directClip != null)
+                return directClip;
+
+            if (!Directory.Exists("Assets/Resources"))
+                return null;
+
+            foreach (string phase in Directory.GetDirectories("Assets/Resources", "phase_*", SearchOption.AllDirectories))
+            {
+                string normalizedPhase = phase.Replace("\\", "/");
+                string resourcePrefix = normalizedPhase.StartsWith("Assets/Resources/")
+                    ? normalizedPhase.Substring("Assets/Resources/".Length)
+                    : normalizedPhase;
+                string resourcePath = (resourcePrefix + "/" + animationPath).Replace("\\", "/");
+
+                AnimationClip clip = Resources.Load<AnimationClip>(resourcePath);
+                if (clip != null)
+                    return clip;
+
+                string assetPath = Path.Combine(normalizedPhase, animationPath + ".anim").Replace("\\", "/");
+                clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(assetPath);
+                if (clip != null)
+                    return clip;
+
+                string eggPath = Path.Combine(normalizedPhase, animationPath + ".egg").Replace("\\", "/");
+                foreach (UnityEngine.Object asset in AssetDatabase.LoadAllAssetsAtPath(eggPath))
+                {
+                    if (asset is AnimationClip animationClip)
+                        return animationClip;
+                }
+            }
+
+            return null;
+        }
+
+        private static void ApplyStructuredVisualColor(
+            GameObject ownerGO,
+            GameObject root,
+            ObjectData ownerData,
+            ImportStatistics stats,
+            ImportSettings settings)
+        {
+            if (ownerGO == null || ownerData == null || !ownerData.visualColor.HasValue)
+                return;
+
+            if (settings?.importObjectListData != true || ownerGO == root)
+                return;
+
+            var typeInfo = ownerGO.GetComponent<ObjectListInfo>();
+            if (typeInfo == null)
+                return;
+
+            typeInfo.visualColor = ownerData.visualColor.Value;
+
+            VisualColorHandler colorHandler = ownerGO.GetComponent<VisualColorHandler>();
+            if (colorHandler == null)
+                colorHandler = ownerGO.AddComponent<VisualColorHandler>();
+
+            colorHandler.ApplyVisualColor(ownerData.visualColor.Value);
+            EditorUtility.SetDirty(ownerGO);
+            EditorUtility.SetDirty(typeInfo);
+            EditorUtility.SetDirty(colorHandler);
+
+            if (stats != null)
+                stats.visualColorsApplied++;
+        }
+
         private static void ProcessAdditionalDataTemplates(
             string sourcePath,
             bool useEgg,
@@ -1003,6 +1595,9 @@ namespace WorldDataImporter.Algorithms
                         DebugLogger.LogWorldImporter($"Stored AdditionalData for {currentData.id}: {string.Join(", ", currentData.additionalData)}");
                         continue;
                     }
+
+                    if (TryProcessStructuredVisualProperty(key, val, lines, ref lineIndex, currentGO, root, useEgg, currentData, stats, settings))
+                        continue;
 
                     MarkObjectsForCleanup(key, val, currentGO, root, settings, holidayObjectsToDelete, nodeObjectsToDelete, collisionObjectsToDelete, gameAreaObjectsToDelete);
                     PropertyProcessor.ProcessProperty(key, val, currentGO, root, useEgg, currentData, stats, settings);
