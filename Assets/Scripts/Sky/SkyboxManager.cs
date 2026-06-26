@@ -241,9 +241,9 @@ namespace POTCO.Sky
         public bool updateDirectionalLight = true;
         public bool updateAmbientLight = true;
         [Tooltip("Panda light colors are brighter than Unity scene lighting. This scale keeps world geometry from being over-lit.")]
-        [Range(0f, 1f)] public float unityAmbientScale = 0.25f;
+        [Range(0f, 1f)] public float unityAmbientScale = 0.023f;
         [Tooltip("Intensity applied to the reference directional lights after color conversion.")]
-        [Range(0f, 2f)] public float unityDirectionalLightIntensity = 0.7f;
+        [Range(0f, 2f)] public float unityDirectionalLightIntensity = 0.47f;
         [Tooltip("Convert reference world units into Unity render units so the model sky stays inside normal camera clipping.")]
         [Range(0.001f, 0.1f)] public float referenceRenderUnitScale = 0.08f;
         [Tooltip("Raise the main camera far clip plane if needed so the model sky remains renderable.")]
