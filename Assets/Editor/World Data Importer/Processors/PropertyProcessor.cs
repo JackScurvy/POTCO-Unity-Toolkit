@@ -17,6 +17,7 @@ namespace WorldDataImporter.Processors
         private static ImportStatistics currentStats;
         private static ObjectListInfo cachedObjectListInfo;
         private static GameObject cachedGameObject;
+        private static bool UseLegacyInlineShoreFoamInjection => false;
 
         private static ObjectListInfo GetCachedObjectListInfo()
         {
@@ -248,15 +249,10 @@ namespace WorldDataImporter.Processors
                         // Apply any pending visual modifications (only if enabled)
                         if (instance != null)
                         {
-                            // --- AUTOMATIC ISLAND WATER METADATA INJECTION ---
-                            if (IsIslandModelPath(modelPath))
-                            {
-                                AttachIslandOceanMetadata(modelPath, currentGO, useEgg);
-                            }
-                            // -----------------------------------------------
+                            IslandReferenceVisualUtility.AttachReferenceIslandVisuals(modelPath, currentGO, useEgg);
 
                             // --- AUTOMATIC SHORELINE FOAM INJECTION ---
-                            if (IsIslandModelPath(modelPath))
+                            if (UseLegacyInlineShoreFoamInjection && IsIslandModelPath(modelPath))
                             {
                                 // Construct foam model path: add "_wave_none" before extension (which is implied)
                                 // e.g. "phase_2/models/islands/pir_m_are_isl_delFuego" -> ".../pir_m_are_isl_delFuego_wave_none"

@@ -229,7 +229,12 @@ namespace POTCO.Ocean
 
         void UpdateMaterialProperties()
         {
-            if (oceanRenderers == null || oceanRenderers.Length == 0) return;
+            if (oceanRenderers == null || oceanRenderers.Length == 0)
+            {
+                RefreshMaterials();
+                if (oceanRenderers == null || oceanRenderers.Length == 0)
+                    return;
+            }
 
             // Update the property block once
             _propBlock.SetVector(_UVScaleID, uvScale);

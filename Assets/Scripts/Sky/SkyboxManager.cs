@@ -1,445 +1,354 @@
-using UnityEngine;
+using System;
+using System.Collections;
 using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace POTCO.Sky
 {
     /// <summary>
-    /// Manages POTCO skybox with authentic multi-layer cloud system, stars, sun, and moon.
-    /// Automatically loads textures from Resources/phase_2/maps and handles TOD transitions.
+    /// Runtime clone of the original POTCO SkyGroup / TimeOfDayManager sky setup.
+    /// The reference system is model-driven, not a Unity skybox material: it builds the
+    /// sky dome/card hierarchy, then applies the same SKY_* layer colors, clouds,
+    /// sun/moon hierarchy, fog, and light values from the Python source.
     /// </summary>
-    public class SkyboxManager : MonoBehaviour
+    [DisallowMultipleComponent]
+    public sealed class SkyboxManager : MonoBehaviour
     {
-        [Header("Skybox Material")]
-        public Material skyboxMaterial;
+        public const float MaxTransitionTime = 300f;
+        public const float NonGroupMaxTransitionTime = 30f;
+        public const float ShipFogMultiplier = 0.1f;
+        public const float FogDefaultExp = 0.001f;
+        public const float TodRealSecondsPerGameDay = 3600f;
+        public const float TodGameHoursInGameDay = 24f;
+        public const float SunDepth = 2300f;
+        public const float OverallScale = 10f;
+        public const float LightDepth = SunDepth * OverallScale;
 
-        [Header("Manual Preset Control")]
-        [Tooltip("Current preset for manual preview/editing. Change this to see different presets live.")]
-        public TODPreset currentPreset = TODPreset.Day;
+        private const string ModelSkyDome = "phase_2/models/sky/PiratesSkyDome";
+        private const string ModelSkyDomeCards = "phase_2/models/sky/PiratesSkyDomeCards";
+        private const string ModelStars = "phase_2/models/sky/pir_m_are_wor_stars";
+        private const string ModelSun = "phase_2/models/sky/sun";
+        private const string ModelMoon = "phase_2/models/sky/moon";
+        private const string ModelEffectCards = "phase_2/models/effects/effectCards";
+        private const string MapRoot = "phase_2/maps/";
 
-        [Tooltip("Use manual preset mode (disables automatic time-based transitions)")]
-        public bool useManualPreset = false;
+        public enum SkyType
+        {
+            Off = 0,
+            Last = 1,
+            Dawn = 2,
+            Day = 3,
+            Dusk = 4,
+            Night = 5,
+            Stars = 6,
+            Halloween = 7,
+            Swamp = 8,
+            Invasion = 9,
+            Overcast = 10,
+            OvercastNight = 11
+        }
 
-        [Tooltip("Transition duration in seconds when manually switching presets")]
-        public float transitionDuration = 10f;
+        public enum TODPreset
+        {
+            Day,
+            Sunset,
+            Night,
+            Stars,
+            Overcast
+        }
 
-        [Header("Automatic Day/Night Cycle")]
-        [Tooltip("Time of day (0-24 hours). Sun rises at 6, peaks at 12, sets at 18")]
-        [Range(0, 24)]
-        public float timeOfDay = 11.4f;
+        public enum TodState
+        {
+            Off = -1,
+            Dawn = 0,
+            DawnToDay = 1,
+            Day = 2,
+            DayToDusk = 3,
+            Dusk = 4,
+            DuskToNight = 5,
+            Night = 6,
+            NightToStars = 7,
+            Stars = 8,
+            StarsToDawn = 9,
+            DayToStorm = 10,
+            Swamp = 11,
+            Halloween = 12,
+            FullMoon = 13,
+            HalfMoon = 14,
+            HalfMoon2 = 15,
+            Custom = 16,
+            JollyInvasion = 17,
+            NormalToJolly = 18,
+            JollyToNight = 19,
+            JollyToCursed = 20,
+            Base = 21
+        }
 
-        [Tooltip("Speed of time progression (hours per real second). Example: 1.0 = 1 hour per second")]
-        public float timeSpeed = 0.82f;
+        public enum ReferenceFogType
+        {
+            Off = 0,
+            Exp = 1,
+            Linear = 2
+        }
 
-        [Tooltip("Automatically advance time for continuous day/night cycle")]
+        [Serializable]
+        public struct ReferenceSkyLayer
+        {
+            public string textureName;
+            public string texcoordName;
+            public Color stageColor;
+            public Color colorScale;
+
+            public ReferenceSkyLayer(string textureName, string texcoordName, Color stageColor, Color colorScale)
+            {
+                this.textureName = textureName;
+                this.texcoordName = texcoordName;
+                this.stageColor = stageColor;
+                this.colorScale = colorScale;
+            }
+        }
+
+        [Serializable]
+        public struct ReferenceSkySettings
+        {
+            public SkyType skyType;
+            public string name;
+            public ReferenceSkyLayer sides;
+            public ReferenceSkyLayer top;
+            public Color cloudsColorScale;
+            public Color horizonColorScale;
+            public Color clearColor;
+
+            public ReferenceSkySettings(
+                SkyType skyType,
+                string name,
+                ReferenceSkyLayer sides,
+                ReferenceSkyLayer top,
+                Color cloudsColorScale,
+                Color horizonColorScale,
+                Color clearColor)
+            {
+                this.skyType = skyType;
+                this.name = name;
+                this.sides = sides;
+                this.top = top;
+                this.cloudsColorScale = cloudsColorScale;
+                this.horizonColorScale = horizonColorScale;
+                this.clearColor = clearColor;
+            }
+        }
+
+        [Serializable]
+        public struct ReferenceEnvironmentSettings
+        {
+            public TodState todState;
+            public Vector3 direction;
+            public Vector3 lightSwitch;
+            public Color frontColor;
+            public Color backColor;
+            public Color ambientColor;
+            public ReferenceFogType fogType;
+            public Color fogColor;
+            public float fogExp;
+            public Vector2 fogLinearRange;
+            public SkyType skyType;
+            public Color starColor;
+            public float moonSize;
+            public float moonOverlay;
+            public float moonPhase;
+            public Color seaColor;
+            public Color seaColorShader;
+            public Vector3 seaFactor;
+            public int envEffect;
+
+            public ReferenceEnvironmentSettings(TodState todState)
+            {
+                this.todState = todState;
+                direction = new Vector3(0f, 30f, 245f);
+                lightSwitch = Vector3.one;
+                frontColor = Color.black;
+                backColor = Color.black;
+                ambientColor = Color.black;
+                fogType = ReferenceFogType.Exp;
+                fogColor = new Color(0.25f, 0.25f, 0.25f, 0f);
+                fogExp = 0.0001f;
+                fogLinearRange = new Vector2(500f, 750f);
+                skyType = SkyType.Day;
+                starColor = new Color(1f, 1f, 1f, 0f);
+                moonSize = 1f;
+                moonOverlay = 0f;
+                moonPhase = 1f;
+                seaColor = new Color(0.2f, 0.2f, 0.2f, 1f);
+                seaColorShader = new Color(0.2f, 0.2f, 0.2f, 1f);
+                seaFactor = Vector3.one;
+                envEffect = 0;
+            }
+        }
+
+        [Serializable]
+        public struct ReferenceCycleSample
+        {
+            public float hour;
+            public TodState fromState;
+            public TodState toState;
+            public float stateStartHour;
+            public float stateElapsedHours;
+            public float stateDurationHours;
+            public float transitionDurationHours;
+            public float transitionT;
+            public float sunT;
+            public ReferenceEnvironmentSettings environment;
+            public ReferenceSkySettings skySettings;
+        }
+
+        [Header("Reference Time Of Day")]
+        [Tooltip("Build the POTCO SkyGroup hierarchy when play mode starts.")]
+        public bool initializeOnStart = true;
+
+        [Tooltip("Keep the sky centered on the active camera like Panda3D's CompassEffect sky.")]
+        public bool followMainCamera = true;
+
+        [Tooltip("Current in-game hour. The original regular cycle is 24 game hours in 3600 real seconds.")]
+        [Range(0f, 24f)]
+        public float timeOfDay = 12f;
+
+        [Tooltip("Compatibility field: game hours advanced per real second at cycleSpeed 1.")]
+        public float timeSpeed = TodGameHoursInGameDay / TodRealSecondsPerGameDay;
+
+        [Tooltip("Multiplier applied to the original 3600-second POTCO day.")]
+        public float cycleSpeed = 1f;
+
+        [Tooltip("Advance through the reference regular day/night cycle.")]
         public bool autoAdvanceTime = true;
 
-        [Header("Time to Preset Mapping")]
-        [Tooltip("Define which presets are used at which times during the automatic cycle")]
-        public List<TimePresetMapping> timePresetMappings = new List<TimePresetMapping>
-        {
-            new TimePresetMapping { startTime = 5f, endTime = 7f, preset = TODPreset.Day, transitionFromPrevious = true },
-            new TimePresetMapping { startTime = 7f, endTime = 16f, preset = TODPreset.Day, transitionFromPrevious = false },
-            new TimePresetMapping { startTime = 16f, endTime = 19f, preset = TODPreset.Sunset, transitionFromPrevious = true },
-            new TimePresetMapping { startTime = 19f, endTime = 21f, preset = TODPreset.Night, transitionFromPrevious = true },
-            new TimePresetMapping { startTime = 21f, endTime = 5f, preset = TODPreset.Night, transitionFromPrevious = false }
-        };
+        [Header("Manual Control")]
+        public bool useManualPreset = false;
+        public TODPreset currentPreset = TODPreset.Day;
+        public SkyType manualSkyType = SkyType.Day;
+        public float transitionDuration = 10f;
+        [Range(0, 3)] public int defaultCloudLevel = 1;
 
-        [Tooltip("Auto-update directional light rotation with sun")]
+        [Header("Cloud Motion")]
+        public Vector2 cloudsTopScrollSpeed = new Vector2(2f / 400f, 1f / 400f);
+        public Vector2 sidesCloudScrollSpeed = new Vector2(-2f / 400f, 0f);
+
+        [Header("Scene Integration")]
+        public bool updateRenderSettings = true;
+        public bool updateMainCameraClearColor = true;
+        public bool updateFog = true;
+        public bool enableFog = true;
         public bool updateDirectionalLight = true;
-
-        public Light directionalLight;
-
-        [Header("Light Settings")]
-        [Tooltip("Minimum light intensity (when sun is hidden)")]
-        [Range(0, 2)]
-        public float minLightIntensity = 0.82f;
-
-        [Tooltip("Maximum light intensity (when sun is at full)")]
-        [Range(0, 3)]
-        public float maxLightIntensity = 1.46f;
-
-        [Tooltip("Light color at day")]
-        public Color dayLightColor = new Color(1f, 0.96f, 0.84f);
-
-        [Tooltip("Light color at sunset")]
-        public Color sunsetLightColor = new Color(1f, 0.7f, 0.5f);
-
-        [Tooltip("Light color at night")]
-        public Color nightLightColor = new Color(0.5f, 0.6f, 0.8f);
-
-        [Tooltip("Update ambient light with TOD")]
         public bool updateAmbientLight = true;
+        [Tooltip("Panda light colors are brighter than Unity scene lighting. This scale keeps world geometry from being over-lit.")]
+        [Range(0f, 1f)] public float unityAmbientScale = 0.25f;
+        [Tooltip("Intensity applied to the reference directional lights after color conversion.")]
+        [Range(0f, 2f)] public float unityDirectionalLightIntensity = 0.7f;
+        [Tooltip("Convert reference world units into Unity render units so the model sky stays inside normal camera clipping.")]
+        [Range(0.001f, 0.1f)] public float referenceRenderUnitScale = 0.08f;
+        [Tooltip("Raise the main camera far clip plane if needed so the model sky remains renderable.")]
+        public bool expandMainCameraClipForSky = true;
+        public float minimumSkyFarClipPlane = 9000f;
+        public Light directionalLight;
+        public Light shadowDirectionalLight;
 
-        [Tooltip("Ambient intensity multiplier")]
-        [Range(0, 2)]
-        public float ambientIntensity = 1.06f;
+        public GameObject SkyGroupRoot { get; private set; }
+        public SkyType LastSky { get; private set; } = SkyType.Off;
+        public int CurrentCloudLevel { get; private set; } = -1;
+        public string CurrentCloudTextureName { get; private set; } = string.Empty;
+        public ReferenceSkySettings CurrentSkySettings { get; private set; }
+        public ReferenceEnvironmentSettings CurrentEnvironmentSettings { get; private set; }
+        public ReferenceCycleSample CurrentCycleSample { get; private set; }
+        public Transform RelativeCompassRoot { get; private set; }
+        public Transform SkyHandle { get; private set; }
+        public Transform SunLightAnchor { get; private set; }
+        public Transform ShadowLightAnchor { get; private set; }
+        public GameObject MoonModelRoot { get; private set; }
 
-        [Header("Cloud Settings")]
-        [Tooltip("Cloud Layer A speed: +2.0 over 400s = (0.005, 0.0025) per second")]
-        public Vector2 cloudSpeedA = new Vector2(0.005f, 0.0025f);
+        private Transform sidesLayer;
+        private Transform topLayer;
+        private Transform horizonLayer;
+        private Transform cloudsLayer;
+        private Transform starsLayer;
+        private Transform sunTrack;
+        private Transform sunWheelHeading;
+        private Transform sunWheelPitch;
+        private Transform sunWheelRoll;
+        private Transform sunModelRoot;
+        private Transform moonGlowRoot;
+        private Transform moonOverlayRoot;
+        private Transform moonAlphaNode;
 
-        [Tooltip("Cloud Layer B speed: -2.0 over 400s = (-0.005, 0) per second")]
-        public Vector2 cloudSpeedB = new Vector2(-0.005f, 0f);
+        private readonly List<Material> runtimeMaterials = new List<Material>();
+        private readonly Dictionary<string, Texture2D> textureCache = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Texture2D> fallbackTextures = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<SkyType, ReferenceSkySettings> skySettingsByType = new Dictionary<SkyType, ReferenceSkySettings>();
 
-        [Tooltip("Cloud UV scale - affects cloud size")]
-        public float cloudScale = 5.88f;
+        private Material sidesMaterial;
+        private Material topMaterial;
+        private Material horizonMaterial;
+        private Material cloudsMaterial;
+        private Material starsMaterial;
+        private Material sunMaterial;
+        private Material moonMaterial;
+        private Material moonGlowMaterial;
+        private Material moonOverlayMaterial;
 
-        [Header("Direct Override Controls")]
-        [Tooltip("Override brightness (0 = use preset)")]
-        [Range(0, 3)]
-        public float brightnessOverride = 0f;
+        private float cloudBlend;
+        private string blendingCloudTextureName = "transparent";
+        private bool initialized;
+        private bool lockSunPosition;
+        private float moonState = 1f;
+        private float moonSize = 1f;
+        private float moonOverlayAlpha;
+        private Vector3 currentSunAngle;
+        private float currentReferenceSunHeight;
+        private SkyType previousAppliedSkyType = SkyType.Day;
+        private TODPreset previousPreset = TODPreset.Day;
+        private Material previousRenderSettingsSkybox;
+        private bool capturedRenderSettingsSkybox;
+        private float cloudScrollTime;
+        private Coroutine skyTransitionRoutine;
+        private Coroutine cloudTransitionRoutine;
+        private Coroutine sunTransitionRoutine;
+        private Coroutine moonTransitionRoutine;
+        private Coroutine moonOverlayTransitionRoutine;
 
-        [Tooltip("Override exposure (0 = use preset)")]
-        [Range(0, 8)]
-        public float exposureOverride = 0f;
+        public static IReadOnlyDictionary<SkyType, ReferenceSkySettings> ReferenceSkySettingsByType => StaticSkySettings;
 
-        [Tooltip("Override cloud intensity (0 = use preset)")]
-        [Range(0, 3)]
-        public float cloudIntensityOverride = 0f;
-
-        [Tooltip("Override stars intensity (-1 = use preset)")]
-        [Range(-1, 1)]
-        public float starsIntensityOverride = -1f;
-
-        [Tooltip("Override stars scale (-1 = use preset)")]
-        [Range(-1, 5)]
-        public float starsScaleOverride = -1f;
-
-        [Header("Stars Fade Settings")]
-        [Tooltip("Stars fade start based on sun position. Lower = stars appear even when sun is nearby")]
-        [Range(-1, 1)]
-        public float starsFadeStart = 1f;
-
-        [Tooltip("Stars fade end based on sun position. Higher = stars visible longer")]
-        [Range(-1, 1)]
-        public float starsFadeEnd = 1f;
-
-        [Tooltip("Enable height-based fading (fades stars near horizon)")]
-        public bool enableStarsHeightFade = true;
-
-        [Header("Preset Library")]
-        public TODSettings daySettings = new TODSettings
+        private static readonly Dictionary<SkyType, ReferenceSkySettings> StaticSkySettings = BuildStaticSkySettings();
+        private static readonly ReferenceCycleEntry[] RegularCycle =
         {
-            name = "Day",
-            skyColorTopA = new Color(0.216f, 0.491f, 0.984f, 1f),
-            skyColorTopB = new Color(0.4f, 0.6f, 0.95f, 1f),
-            skyColorHorizonA = new Color(0.7f, 0.8f, 1.0f, 1f),
-            skyColorHorizonB = new Color(0.65f, 0.75f, 0.95f, 1f),
-            skyColorBottomA = new Color(0.5f, 0.65f, 0.9f, 1f),
-            skyColorBottomB = new Color(0.45f, 0.6f, 0.85f, 1f),
-            stageBlend = 0.3f,
-            cloudTexture = "clouds_heavy",
-            cloudIntensity = 4.18f,
-            cloudBlendAB = 0.5f,
-            starsIntensity = 0.21f,
-            starsScale = 3.71f,
-            sunIntensity = 3.0f,
-            sunSize = 0.04f,
-            sunGlowIntensity = 1.0f,
-            sunDirection = new Vector3(0.2f, 0.5f, 1f),
-            moonIntensity = 0f,
-            moonSize = 0f,
-            moonGlowIntensity = 0f,
-            moonDirection = new Vector3(0f, 0f, 0f),
-            brightness = 0.61f,
-            exposure = 1.28f,
-            contrast = 1.13f
+            new ReferenceCycleEntry(TodState.Stars, 4f, 1f),
+            new ReferenceCycleEntry(TodState.Dawn, 5f, 2f),
+            new ReferenceCycleEntry(TodState.Day, 7f, 2f),
+            new ReferenceCycleEntry(TodState.Dusk, 4f, 2f),
+            new ReferenceCycleEntry(TodState.Night, 4f, 1f)
         };
 
-        public TODSettings sunsetSettings = new TODSettings
+        private readonly struct ReferenceCycleEntry
         {
-            name = "Sunset",
-            skyColorTopA = new Color(0.6f, 0.35f, 0.45f, 1f),
-            skyColorTopB = new Color(0.5f, 0.3f, 0.4f, 1f),
-            skyColorHorizonA = new Color(1.0f, 0.6f, 0.3f, 1f),
-            skyColorHorizonB = new Color(0.95f, 0.5f, 0.25f, 1f),
-            skyColorBottomA = new Color(0.45f, 0.4f, 0.55f, 1f),
-            skyColorBottomB = new Color(0.4f, 0.35f, 0.5f, 1f),
-            stageBlend = 0.6f,
-            cloudTexture = "clouds_medium",
-            cloudIntensity = 1.2f,
-            cloudBlendAB = 0.6f,
-            starsIntensity = 0.05f,
-            starsScale = 3.71f,
-            sunIntensity = 2.0f,
-            sunSize = 0.06f,
-            sunGlowIntensity = 1.5f,
-            sunDirection = new Vector3(0.7f, 0.1f, 1f),
-            moonIntensity = 0.2f,
-            moonSize = 0f,
-            moonGlowIntensity = 0f,
-            moonDirection = new Vector3(-0.3f, 0.2f, -1f),
-            brightness = 1.0f,
-            exposure = 1.1f,
-            contrast = 1.1f
-        };
+            public readonly TodState state;
+            public readonly float durationHours;
+            public readonly float transitionHours;
 
-        public TODSettings nightSettings = new TODSettings
-        {
-            name = "Night",
-            skyColorTopA = new Color(0.05f, 0.08f, 0.15f, 1f),
-            skyColorTopB = new Color(0.03f, 0.06f, 0.12f, 1f),
-            skyColorHorizonA = new Color(0.15f, 0.2f, 0.35f, 1f),
-            skyColorHorizonB = new Color(0.12f, 0.17f, 0.3f, 1f),
-            skyColorBottomA = new Color(0.02f, 0.04f, 0.1f, 1f),
-            skyColorBottomB = new Color(0.01f, 0.03f, 0.08f, 1f),
-            stageBlend = 0.5f,
-            cloudTexture = "clouds_heavy",
-            cloudIntensity = 0.6f,
-            cloudBlendAB = 0.4f,
-            starsIntensity = 10.06f,
-            starsScale = 3.71f,
-            sunIntensity = 0f,
-            sunSize = 0f,
-            sunGlowIntensity = 0f,
-            sunDirection = new Vector3(0f, 0f, 0f),
-            moonIntensity = 1.0f,
-            moonSize = 0.035f,
-            moonGlowIntensity = 0.6f,
-            moonDirection = new Vector3(0f, 0.5f, -1f),
-            brightness = 0.29f,
-            exposure = 0.8f,
-            contrast = 1.0f
-        };
-
-        public TODSettings starsSettings = new TODSettings
-        {
-            name = "Stars",
-            skyColorTopA = new Color(0.02f, 0.03f, 0.08f, 1f),
-            skyColorTopB = new Color(0.01f, 0.02f, 0.06f, 1f),
-            skyColorHorizonA = new Color(0.08f, 0.1f, 0.18f, 1f),
-            skyColorHorizonB = new Color(0.06f, 0.08f, 0.15f, 1f),
-            skyColorBottomA = new Color(0.01f, 0.02f, 0.05f, 1f),
-            skyColorBottomB = new Color(0.005f, 0.01f, 0.03f, 1f),
-            stageBlend = 0.5f,
-            cloudTexture = "clouds_light",
-            cloudIntensity = 0.3f,
-            cloudBlendAB = 0.3f,
-            starsIntensity = 4.35f,
-            starsScale = 4.79f,
-            sunIntensity = 0f,
-            sunSize = 0f,
-            sunGlowIntensity = 0f,
-            sunDirection = new Vector3(0f, 0f, 0f),
-            moonIntensity = 0.7f,
-            moonSize = 0.03f,
-            moonGlowIntensity = 0.4f,
-            moonDirection = new Vector3(0.1f, 0.8f, -1f),
-            brightness = 0.4f,
-            exposure = 1.27f,
-            contrast = 0.95f
-        };
-
-        public TODSettings overcastSettings = new TODSettings
-        {
-            name = "Overcast",
-            skyColorTopA = new Color(0.35f, 0.4f, 0.45f, 1f),
-            skyColorTopB = new Color(0.3f, 0.35f, 0.4f, 1f),
-            skyColorHorizonA = new Color(0.5f, 0.55f, 0.6f, 1f),
-            skyColorHorizonB = new Color(0.45f, 0.5f, 0.55f, 1f),
-            skyColorBottomA = new Color(0.4f, 0.45f, 0.5f, 1f),
-            skyColorBottomB = new Color(0.35f, 0.4f, 0.45f, 1f),
-            stageBlend = 0.5f,
-            cloudTexture = "clouds_heavy",
-            cloudIntensity = 1.5f,
-            cloudBlendAB = 0.7f,
-            starsIntensity = 0.0f,
-            starsScale = 1.0f,
-            sunIntensity = 0.5f,
-            sunSize = 0.08f,
-            sunGlowIntensity = 0.3f,
-            sunDirection = new Vector3(0f, 0.5f, 0.9f),
-            moonIntensity = 0.0f,
-            moonSize = 0.0f,
-            moonGlowIntensity = 0.0f,
-            moonDirection = new Vector3(0f, 0f, 0f),
-            brightness = 0.8f,
-            exposure = 1.49f,
-            contrast = 0.9f
-        };
-
-        // Internal state
-        private TODSettings currentSettings;
-        private TODPreset _previousPreset;
-        private bool _isTransitioning = false;
-        private float _transitionTime = 0f;
-        private TODSettings _fromSettings;
-        private TODSettings _toSettings;
-
-        void OnValidate()
-        {
-            // Create material if it doesn't exist
-            if (skyboxMaterial == null)
+            public ReferenceCycleEntry(TodState state, float durationHours, float transitionHours)
             {
-                CreateSkyboxMaterial();
-                if (skyboxMaterial == null) return;
-            }
-
-            // Update cloud settings
-            skyboxMaterial.SetVector("_CloudSpeedA", cloudSpeedA);
-            skyboxMaterial.SetVector("_CloudSpeedB", cloudSpeedB);
-            skyboxMaterial.SetFloat("_CloudScale", cloudScale);
-
-            // Ensure skybox is assigned to RenderSettings
-            if (RenderSettings.skybox != skyboxMaterial)
-            {
-                RenderSettings.skybox = skyboxMaterial;
-                DynamicGI.UpdateEnvironment();
-            }
-
-            // Update ambient settings
-            if (updateAmbientLight)
-            {
-                RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
-                RenderSettings.ambientIntensity = ambientIntensity;
-            }
-
-            // Apply current preset or time-based settings (this makes edit-time changes visible)
-            if (useManualPreset)
-            {
-                // Manual mode: apply current preset
-                TODSettings settings = GetSettingsForPreset(currentPreset);
-                ApplySettings(settings, false);
-                Debug.Log($"OnValidate: Applied {currentPreset} preset settings");
-            }
-            else
-            {
-                // Automatic mode: apply time-based settings for current time using mappings
-                TODSettings settings = GetSettingsForTime(timeOfDay);
-
-                // Calculate celestial positions
-                Vector3 sunDir = CalculateSunDirection(timeOfDay);
-                Vector3 moonDir = CalculateMoonDirection(timeOfDay);
-
-                // Override sun/moon directions
-                settings.sunDirection = sunDir;
-                settings.moonDirection = moonDir;
-
-                // Apply settings
-                ApplySettings(settings, false);
+                this.state = state;
+                this.durationHours = durationHours;
+                this.transitionHours = transitionHours;
             }
         }
 
-        void Start()
+        public static ReferenceSkySettings GetReferenceSkySettings(SkyType skyType)
         {
-            if (skyboxMaterial == null)
-            {
-                CreateSkyboxMaterial();
-            }
+            if (skyType == SkyType.Last)
+                skyType = SkyType.Day;
 
-            if (skyboxMaterial == null)
-            {
-                Debug.LogError("SkyboxManager: Failed to create skybox material!");
-                return;
-            }
+            if (StaticSkySettings.TryGetValue(skyType, out ReferenceSkySettings settings))
+                return settings;
 
-            // Assign to scene
-            RenderSettings.skybox = skyboxMaterial;
-            DynamicGI.UpdateEnvironment();
-
-            EnsureDirectionalLightBinding();
-
-            // Initialize current settings
-            currentSettings = GetSettingsForPreset(currentPreset);
-            _previousPreset = currentPreset;
-
-            Debug.Log($"SkyboxManager: Initialized. Mode: {(useManualPreset ? "Manual Preset" : "Auto Time-Based")} | Current: {currentPreset} | Time: {timeOfDay}");
-        }
-
-        void Update()
-        {
-            if (skyboxMaterial == null) return;
-
-            // MODE 1: Manual Preset Mode (for editing and previewing presets)
-            if (useManualPreset)
-            {
-                // Check if preset changed
-                if (currentPreset != _previousPreset)
-                {
-                    SetPreset(currentPreset);
-                    _previousPreset = currentPreset;
-                }
-
-                // Handle preset transition
-                if (_isTransitioning)
-                {
-                    _transitionTime += Time.deltaTime;
-                    float t = Mathf.Clamp01(_transitionTime / transitionDuration);
-
-                    currentSettings = LerpSettings(_fromSettings, _toSettings, t);
-                    ApplySettings(currentSettings, false);
-
-                    if (t >= 1f)
-                    {
-                        _isTransitioning = false;
-                        currentSettings = _toSettings;
-                    }
-                }
-                else
-                {
-                    // Continuously apply the current preset (so live edits are visible)
-                    currentSettings = GetSettingsForPreset(currentPreset);
-                    ApplySettings(currentSettings, false);
-                }
-            }
-            // MODE 2: Automatic Time-Based Mode (for day/night cycle)
-            else
-            {
-                // Auto-advance time
-                if (autoAdvanceTime)
-                {
-                    timeOfDay += timeSpeed * Time.deltaTime;
-                    if (timeOfDay >= 24f) timeOfDay -= 24f;
-                }
-
-                // Get settings for current time using configurable mappings
-                currentSettings = GetSettingsForTime(timeOfDay);
-
-                // Calculate celestial positions based on time of day
-                Vector3 sunDir = CalculateSunDirection(timeOfDay);
-                Vector3 moonDir = CalculateMoonDirection(timeOfDay);
-
-                // Override sun/moon directions with calculated values (for realistic motion)
-                currentSettings.sunDirection = sunDir;
-                currentSettings.moonDirection = moonDir;
-
-                // Apply all settings to material
-                ApplySettings(currentSettings, false);
-            }
-
-            // Update directional light (works in both modes)
-            EnsureDirectionalLightBinding();
-            if (updateDirectionalLight && directionalLight != null)
-            {
-                Vector3 sunDir = currentSettings.sunDirection;
-                directionalLight.transform.rotation = Quaternion.LookRotation(-sunDir);
-
-                // Calculate intensity based on sun intensity
-                float normalizedSunIntensity = Mathf.Clamp01(currentSettings.sunIntensity / 3.0f);
-                directionalLight.intensity = Mathf.Lerp(minLightIntensity, maxLightIntensity, normalizedSunIntensity);
-
-                // Determine light color
-                Color targetLightColor = useManualPreset ? CalculateLightColorFromSettings(currentSettings) : CalculateLightColor(timeOfDay);
-                directionalLight.color = targetLightColor;
-            }
-
-            // Update ambient light (works in both modes)
-            if (updateAmbientLight)
-            {
-                RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
-                RenderSettings.ambientIntensity = ambientIntensity;
-            }
-        }
-
-        void EnsureDirectionalLightBinding()
-        {
-            if (!updateDirectionalLight)
-                return;
-
-            if (IsSceneDirectionalLightCandidate(directionalLight))
-                return;
-
-            directionalLight = FindSceneDirectionalLight();
+            return StaticSkySettings[SkyType.Day];
         }
 
         public static Light FindSceneDirectionalLight()
@@ -472,852 +381,1757 @@ namespace POTCO.Sky
             return lightObject.scene.IsValid();
         }
 
-        /// <summary>
-        /// Calculate directional light color based on time of day
-        /// </summary>
-        Color CalculateLightColor(float time)
+        public static ReferenceEnvironmentSettings GetReferenceEnvironmentSettings(TodState state)
         {
-            // Dawn/Sunrise (5-7): Night blue to warm sunrise
-            if (time >= 5f && time < 7f)
+            ReferenceEnvironmentSettings settings = CreateBaseEnvironment(state);
+
+            switch (state)
             {
-                float t = (time - 5f) / 2f;
-                return Color.Lerp(nightLightColor, sunsetLightColor, t);
-            }
-            // Day (7-16): Bright daylight
-            else if (time >= 7f && time < 16f)
-            {
-                return dayLightColor;
-            }
-            // Sunset (16-19): Day to warm sunset
-            else if (time >= 16f && time < 19f)
-            {
-                float t = (time - 16f) / 3f;
-                return Color.Lerp(dayLightColor, sunsetLightColor, t);
-            }
-            // Dusk (19-21): Sunset to night
-            else if (time >= 19f && time < 21f)
-            {
-                float t = (time - 19f) / 2f;
-                return Color.Lerp(sunsetLightColor, nightLightColor, t);
-            }
-            // Night (21-5): Cool night colors
-            else
-            {
-                return nightLightColor;
+                case TodState.Dawn:
+                    settings.direction = new Vector3(0f, 35f, 330f);
+                    settings.frontColor = new Color(1.5f, 1.2f, 0.9f, 1f);
+                    settings.backColor = new Color(0.35f, 0.42f, 0.72f, 1f);
+                    settings.ambientColor = new Color(0.38f, 0.53f, 0.68f, 1f);
+                    settings.fogColor = new Color(0.29f, 0.32f, 0.44f, 0f);
+                    settings.fogExp = 0.004f;
+                    settings.skyType = SkyType.Dawn;
+                    settings.seaColor = new Color(0.35f, 0.5f, 0.62f, 1f);
+                    settings.seaColorShader = new Color(0.35f, 0.35f, 0.2f, 1f);
+                    return settings;
+
+                case TodState.Day:
+                    settings.frontColor = new Color(2f, 1.79f, 1.47f, 1f);
+                    settings.backColor = new Color(0.35f, 0.41f, 0.62f, 1f);
+                    settings.ambientColor = new Color(0.8f, 0.88f, 0.93f, 1f);
+                    settings.fogColor = new Color(0.6f, 0.7f, 0.9f, 0f);
+                    settings.fogExp = 0.00060000003f;
+                    settings.skyType = SkyType.Day;
+                    settings.seaColor = new Color(0.3f, 0.75f, 1f, 1f);
+                    settings.seaColorShader = new Color(0.1f, 0.25f, 0.15f, 1f);
+                    return settings;
+
+                case TodState.Dusk:
+                    settings.direction = new Vector3(0f, 35f, 175f);
+                    settings.frontColor = new Color(1.71f, 1.36f, 1.15f, 1f);
+                    settings.backColor = new Color(0.59f, 0.59f, 0.88f, 1f);
+                    settings.ambientColor = new Color(0.52f, 0.39f, 0.42f, 1f);
+                    settings.fogColor = new Color(0.46f, 0.38f, 0.43f, 0f);
+                    settings.fogExp = 0.00060000003f;
+                    settings.skyType = SkyType.Dusk;
+                    settings.seaColor = new Color(0.35f, 0.5f, 0.62f, 1f);
+                    settings.seaColorShader = new Color(0.25f, 0.25f, 0.15f, 1f);
+                    return settings;
+
+                case TodState.Night:
+                    settings.direction = new Vector3(0f, 40f, 90f);
+                    settings.frontColor = new Color(0.3f, 0.45f, 0.58f, 1f);
+                    settings.backColor = new Color(0.84f, 1.02f, 1.5f, 1f);
+                    settings.ambientColor = new Color(0.43f, 0.66f, 0.92f, 1f);
+                    settings.fogColor = new Color(0.02f, 0.04f, 0.15f, 0f);
+                    settings.fogExp = 0.00300000003f;
+                    settings.skyType = SkyType.Night;
+                    settings.starColor = new Color(1f, 1f, 1f, 0.25f);
+                    settings.seaColor = new Color(0.15f, 0.4f, 0.45f, 1f);
+                    settings.seaColorShader = new Color(0.1f, 0.2f, 0.15f, 1f);
+                    return settings;
+
+                case TodState.Stars:
+                    settings.direction = new Vector3(0f, 40f, 20f);
+                    settings.frontColor = new Color(0.39f, 0.49f, 0.91f, 1f);
+                    settings.backColor = new Color(0.78f, 1f, 1.22f, 1f);
+                    settings.ambientColor = new Color(0.51f, 0.58f, 0.82f, 1f);
+                    settings.fogColor = new Color(0f, 0f, 0f, 0f);
+                    settings.fogExp = 0.00100000005f;
+                    settings.skyType = SkyType.Stars;
+                    settings.starColor = new Color(1f, 1f, 1f, 1f);
+                    settings.seaColor = new Color(0.15f, 0.35f, 0.55f, 1f);
+                    settings.seaColorShader = new Color(0.1f, 0.15f, 0.1f, 1f);
+                    return settings;
+
+                case TodState.Halloween:
+                    settings.direction = new Vector3(0f, 300f, 70f);
+                    settings.frontColor = new Color(0.3f, 0.2f, 0.53f, 1f);
+                    settings.backColor = new Color(0.42f, 0.63f, 0.38f, 1f);
+                    settings.ambientColor = new Color(0.75f, 0.82f, 0.57f, 1f);
+                    settings.fogColor = new Color(0.08f, 0.05f, 0.11f, 0f);
+                    settings.fogExp = 0.00120000006f;
+                    settings.skyType = SkyType.Halloween;
+                    settings.seaColor = new Color(0.4f, 0.6f, 0.6f, 1f);
+                    settings.seaColorShader = new Color(0.1f, 0.15f, 0.1f, 1f);
+                    return settings;
+
+                case TodState.FullMoon:
+                    settings.direction = new Vector3(0f, 300f, 110f);
+                    settings.frontColor = new Color(0.3f, 0.2f, 0.53f, 1f);
+                    settings.backColor = new Color(0.48f, 1.06f, 0.76f, 1f);
+                    settings.ambientColor = new Color(0.38f, 0.65f, 0.77f, 1f);
+                    settings.fogColor = new Color(0.11f, 0.08f, 0.14f, 0f);
+                    settings.fogExp = 0f;
+                    settings.skyType = SkyType.Halloween;
+                    settings.seaColor = new Color(0.4f, 0.6f, 0.6f, 1f);
+                    settings.seaColorShader = new Color(0.1f, 0.15f, 0.1f, 1f);
+                    return settings;
+
+                case TodState.HalfMoon:
+                    settings.direction = new Vector3(0f, 300f, 110f);
+                    settings.frontColor = new Color(0.3f, 0.2f, 0.53f, 1f);
+                    settings.backColor = new Color(0.385827f, 0.346457f, 0.267717f, 1f);
+                    settings.ambientColor = new Color(0.66f, 0.69f, 0.99f, 1f);
+                    settings.fogColor = new Color(0.07f, 0.05f, 0.09f, 0f);
+                    settings.fogExp = 0.00025f;
+                    settings.skyType = SkyType.Halloween;
+                    settings.moonPhase = 0f;
+                    settings.seaColor = new Color(0.4f, 0.6f, 0.6f, 1f);
+                    settings.seaColorShader = new Color(0.1f, 0.15f, 0.1f, 1f);
+                    return settings;
+
+                case TodState.HalfMoon2:
+                    settings.direction = new Vector3(0f, 300f, 110f);
+                    settings.frontColor = new Color(0.3f, 0.2f, 0.53f, 1f);
+                    settings.backColor = new Color(0.57f, 0.67f, 0.4f, 1f);
+                    settings.ambientColor = new Color(0.66f, 0.76f, 0.41f, 1f);
+                    settings.fogColor = new Color(0.08f, 0.05f, 0.09f, 0f);
+                    settings.fogExp = 0.00025f;
+                    settings.skyType = SkyType.Halloween;
+                    settings.moonPhase = 0f;
+                    settings.seaColor = new Color(0.4f, 0.6f, 0.6f, 1f);
+                    settings.seaColorShader = new Color(0.1f, 0.15f, 0.1f, 1f);
+                    return settings;
+
+                case TodState.JollyInvasion:
+                    settings.direction = new Vector3(0f, 300f, 110f);
+                    settings.frontColor = new Color(0.3f, 0.24f, 0.67f, 1f);
+                    settings.backColor = new Color(0.74f, 0.85f, 0.52f, 1f);
+                    settings.ambientColor = new Color(0.66f, 0.76f, 0.41f, 1f);
+                    settings.fogColor = new Color(0.1f, 0.12f, 0.03f, 0f);
+                    settings.fogExp = 0.00025f;
+                    settings.skyType = SkyType.Invasion;
+                    settings.moonOverlay = 0.5f;
+                    settings.seaColor = new Color(0.4f, 0.6f, 0.6f, 1f);
+                    settings.seaColorShader = new Color(0.1f, 0.15f, 0.1f, 1f);
+                    return settings;
+
+                case TodState.Swamp:
+                    settings.frontColor = new Color(1.7f, 1.7f, 1.4f, 1f);
+                    settings.backColor = new Color(0.6f, 0.9f, 1.5f, 1f);
+                    settings.ambientColor = new Color(0.9f, 0.9f, 0.8f, 1f);
+                    settings.fogColor = new Color(0.2f, 0.25f, 0.3f, 0f);
+                    settings.fogExp = 0.005f;
+                    settings.skyType = SkyType.Swamp;
+                    return settings;
+
+                case TodState.Base:
+                default:
+                    return settings;
             }
         }
 
-        /// <summary>
-        /// Get settings for a specific time based on time-to-preset mappings
-        /// </summary>
-        TODSettings GetSettingsForTime(float time)
+        public static ReferenceCycleSample EvaluateReferenceCycle(float hour)
         {
-            if (timePresetMappings == null || timePresetMappings.Count == 0)
-            {
-                // Fallback to day settings if no mappings defined
-                return daySettings;
-            }
+            hour = NormalizeHour(hour);
+            float stateStart = 0f;
 
-            // Find the mapping that contains this time
-            TimePresetMapping currentMapping = null;
-            TimePresetMapping previousMapping = null;
-
-            for (int i = 0; i < timePresetMappings.Count; i++)
+            for (int i = 0; i < RegularCycle.Length; i++)
             {
-                if (timePresetMappings[i].ContainsTime(time))
+                ReferenceCycleEntry current = RegularCycle[i];
+                float stateEnd = stateStart + current.durationHours;
+                if (hour < stateEnd || i == RegularCycle.Length - 1)
                 {
-                    currentMapping = timePresetMappings[i];
+                    ReferenceCycleEntry previous = RegularCycle[(i - 1 + RegularCycle.Length) % RegularCycle.Length];
+                    float elapsed = Mathf.Clamp(hour - stateStart, 0f, current.durationHours);
+                    float transitionDuration = Mathf.Min(current.transitionHours, current.durationHours);
+                    float transitionT = transitionDuration > 0f ? Mathf.Clamp01(elapsed / transitionDuration) : 1f;
+                    float sunT = current.durationHours > 0f ? Mathf.Clamp01(elapsed / current.durationHours) : 1f;
 
-                    // Find previous mapping (wrap around if needed)
-                    int prevIndex = i - 1;
-                    if (prevIndex < 0) prevIndex = timePresetMappings.Count - 1;
-                    previousMapping = timePresetMappings[prevIndex];
+                    ReferenceEnvironmentSettings fromEnvironment = GetReferenceEnvironmentSettings(previous.state);
+                    ReferenceEnvironmentSettings toEnvironment = GetReferenceEnvironmentSettings(current.state);
+                    ReferenceEnvironmentSettings environment = LerpEnvironmentSettings(fromEnvironment, toEnvironment, transitionT, sunT);
+                    ReferenceSkySettings skySettings = LerpSkySettings(
+                        GetReferenceSkySettings(fromEnvironment.skyType),
+                        GetReferenceSkySettings(toEnvironment.skyType),
+                        transitionT);
 
-                    break;
+                    return new ReferenceCycleSample
+                    {
+                        hour = hour,
+                        fromState = previous.state,
+                        toState = current.state,
+                        stateStartHour = stateStart,
+                        stateElapsedHours = elapsed,
+                        stateDurationHours = current.durationHours,
+                        transitionDurationHours = transitionDuration,
+                        transitionT = transitionT,
+                        sunT = sunT,
+                        environment = environment,
+                        skySettings = skySettings
+                    };
                 }
+
+                stateStart = stateEnd;
             }
 
-            if (currentMapping == null)
-            {
-                // No mapping found, use day settings as fallback
-                return daySettings;
-            }
-
-            TODSettings currentPresetSettings = GetSettingsForPreset(currentMapping.preset);
-
-            // If transition is enabled, lerp from previous preset to current preset
-            if (currentMapping.transitionFromPrevious && previousMapping != null)
-            {
-                TODSettings previousPresetSettings = GetSettingsForPreset(previousMapping.preset);
-                float t = currentMapping.GetInterpolationFactor(time);
-                return LerpSettings(previousPresetSettings, currentPresetSettings, t);
-            }
-            else
-            {
-                // No transition, just use the current preset directly
-                return currentPresetSettings;
-            }
+            return EvaluateReferenceCycle(0f);
         }
 
-        /// <summary>
-        /// Calculate sun intensity based on time of day using preset library
-        /// </summary>
-        float CalculateSunIntensity(float time)
+        public void InitializeSky()
         {
-            // Dawn (5-7): Night to Day transition
-            if (time >= 5f && time < 7f)
-            {
-                float t = (time - 5f) / 2f;
-                return Mathf.Lerp(nightSettings.sunIntensity, daySettings.sunIntensity, t);
-            }
-            // Day (7-16): Use day preset
-            else if (time >= 7f && time < 16f)
-            {
-                return daySettings.sunIntensity;
-            }
-            // Sunset (16-19): Day to Sunset transition
-            else if (time >= 16f && time < 19f)
-            {
-                float t = (time - 16f) / 3f;
-                return Mathf.Lerp(daySettings.sunIntensity, sunsetSettings.sunIntensity, t);
-            }
-            // Dusk (19-21): Sunset to Night transition
-            else if (time >= 19f && time < 21f)
-            {
-                float t = (time - 19f) / 2f;
-                return Mathf.Lerp(sunsetSettings.sunIntensity, nightSettings.sunIntensity, t);
-            }
-            // Night (21-5): Use night preset
+            DestroyRuntimeSky();
+
+            BuildLocalSettings();
+            transform.localScale = Vector3.one * OverallScale;
+            transform.position = new Vector3(transform.position.x, -10f, transform.position.z);
+
+            SkyGroupRoot = new GameObject("SkyGroup");
+            SkyGroupRoot.transform.SetParent(transform, false);
+            SkyGroupRoot.transform.localScale = Vector3.one * Mathf.Max(0.001f, referenceRenderUnitScale);
+
+            RelativeCompassRoot = CreateChild(SkyGroupRoot.transform, "relativeCompass");
+            SkyHandle = CreateChild(RelativeCompassRoot, "relativeCompass");
+            SkyHandle.localEulerAngles = new Vector3(0f, 180f, 0f);
+
+            initialized = true;
+            BuildSkyDome();
+            BuildCelestialHierarchy();
+
+            previousPreset = currentPreset;
+            previousAppliedSkyType = SkyType.Day;
+
+            SetCloudLevel(Mathf.Clamp(defaultCloudLevel, 0, 3));
+
+            if (useManualPreset)
+                ApplyEnvironment(GetEnvironmentForPreset(currentPreset), true);
             else
-            {
-                return nightSettings.sunIntensity;
-            }
+                ApplyTimeOfDay(timeOfDay);
         }
 
-        /// <summary>
-        /// Calculate moon intensity based on time of day using preset library
-        /// </summary>
-        float CalculateMoonIntensity(float time)
+        public void SetSky(SkyType skyType)
         {
-            // Dawn (5-7): Night to Day transition
-            if (time >= 5f && time < 7f)
-            {
-                float t = (time - 5f) / 2f;
-                return Mathf.Lerp(nightSettings.moonIntensity, daySettings.moonIntensity, t);
-            }
-            // Day (7-16): Use day preset
-            else if (time >= 7f && time < 16f)
-            {
-                return daySettings.moonIntensity;
-            }
-            // Sunset (16-19): Day to Sunset transition
-            else if (time >= 16f && time < 19f)
-            {
-                float t = (time - 16f) / 3f;
-                return Mathf.Lerp(daySettings.moonIntensity, sunsetSettings.moonIntensity, t);
-            }
-            // Dusk (19-21): Sunset to Night transition
-            else if (time >= 19f && time < 21f)
-            {
-                float t = (time - 19f) / 2f;
-                return Mathf.Lerp(sunsetSettings.moonIntensity, nightSettings.moonIntensity, t);
-            }
-            // Night (21-5): Use night preset
-            else
-            {
-                return nightSettings.moonIntensity;
-            }
+            EnsureInitialized();
+
+            if (skyType == SkyType.Last)
+                skyType = LastSky == SkyType.Off ? previousAppliedSkyType : LastSky;
+
+            ReferenceSkySettings settings = GetReferenceSkySettings(skyType);
+            ApplySkySettings(settings);
+            LastSky = skyType;
+
+            if (skyType != SkyType.Off)
+                previousAppliedSkyType = skyType;
         }
 
-        /// <summary>
-        /// Calculate stars intensity based on time of day using preset library
-        /// </summary>
-        float CalculateStarsIntensity(float time)
+        public Coroutine TransitionSky(SkyType skyTypeA, SkyType skyTypeB, float duration = 10f)
         {
-            // Dawn (5-7): Night to Day transition
-            if (time >= 5f && time < 7f)
-            {
-                float t = (time - 5f) / 2f;
-                return Mathf.Lerp(nightSettings.starsIntensity, daySettings.starsIntensity, t);
-            }
-            // Day (7-16): Use day preset
-            else if (time >= 7f && time < 16f)
-            {
-                return daySettings.starsIntensity;
-            }
-            // Sunset (16-19): Day to Sunset transition
-            else if (time >= 16f && time < 19f)
-            {
-                float t = (time - 16f) / 3f;
-                return Mathf.Lerp(daySettings.starsIntensity, sunsetSettings.starsIntensity, t);
-            }
-            // Dusk (19-21): Sunset to Night transition
-            else if (time >= 19f && time < 21f)
-            {
-                float t = (time - 19f) / 2f;
-                return Mathf.Lerp(sunsetSettings.starsIntensity, nightSettings.starsIntensity, t);
-            }
-            // Night (21-5): Use night preset
-            else
-            {
-                return nightSettings.starsIntensity;
-            }
+            EnsureInitialized();
+
+            if (skyTransitionRoutine != null)
+                StopCoroutine(skyTransitionRoutine);
+
+            skyTransitionRoutine = StartCoroutine(TransitionSkyRoutine(skyTypeA, skyTypeB, Mathf.Max(0.01f, duration)));
+            return skyTransitionRoutine;
         }
 
-        /// <summary>
-        /// Calculate overall brightness based on time of day using preset library
-        /// </summary>
-        float CalculateBrightness(float time)
+        public Coroutine TransitionSkyFromCurrent(SkyType skyTypeB, float duration = 10f)
         {
-            // Dawn (5-7): Night to Day transition
-            if (time >= 5f && time < 7f)
-            {
-                float t = (time - 5f) / 2f;
-                return Mathf.Lerp(nightSettings.brightness, daySettings.brightness, t);
-            }
-            // Day (7-16): Use day preset
-            else if (time >= 7f && time < 16f)
-            {
-                return daySettings.brightness;
-            }
-            // Sunset (16-19): Day to Sunset transition
-            else if (time >= 16f && time < 19f)
-            {
-                float t = (time - 16f) / 3f;
-                return Mathf.Lerp(daySettings.brightness, sunsetSettings.brightness, t);
-            }
-            // Dusk (19-21): Sunset to Night transition
-            else if (time >= 19f && time < 21f)
-            {
-                float t = (time - 19f) / 2f;
-                return Mathf.Lerp(sunsetSettings.brightness, nightSettings.brightness, t);
-            }
-            // Night (21-5): Use night preset
-            else
-            {
-                return nightSettings.brightness;
-            }
+            return TransitionSky(LastSky, skyTypeB, duration);
         }
 
-        /// <summary>
-        /// Calculate exposure based on time of day using preset library
-        /// </summary>
-        float CalculateExposure(float time)
+        public void SetCloudLevel(int level)
         {
-            // Dawn (5-7): Night to Day transition
-            if (time >= 5f && time < 7f)
-            {
-                float t = (time - 5f) / 2f;
-                return Mathf.Lerp(nightSettings.exposure, daySettings.exposure, t);
-            }
-            // Day (7-16): Use day preset
-            else if (time >= 7f && time < 16f)
-            {
-                return daySettings.exposure;
-            }
-            // Sunset (16-19): Day to Sunset transition
-            else if (time >= 16f && time < 19f)
-            {
-                float t = (time - 16f) / 3f;
-                return Mathf.Lerp(daySettings.exposure, sunsetSettings.exposure, t);
-            }
-            // Dusk (19-21): Sunset to Night transition
-            else if (time >= 19f && time < 21f)
-            {
-                float t = (time - 19f) / 2f;
-                return Mathf.Lerp(sunsetSettings.exposure, nightSettings.exposure, t);
-            }
-            // Night (21-5): Use night preset
-            else
-            {
-                return nightSettings.exposure;
-            }
+            EnsureInitialized();
+
+            level = Mathf.Clamp(level, 0, 3);
+            CurrentCloudLevel = level;
+            CurrentCloudTextureName = GetCloudTextureName(level);
+            blendingCloudTextureName = CurrentCloudTextureName;
+            cloudBlend = 0f;
+            ApplyCloudTexture(CurrentCloudTextureName, CurrentCloudTextureName, 0f);
         }
 
-        /// <summary>
-        /// Calculate light color from current settings (for manual preset mode)
-        /// </summary>
-        Color CalculateLightColorFromSettings(TODSettings settings)
+        public Coroutine TransitionClouds(int level, float duration = 5f)
         {
-            // Determine light color based on sun/moon intensity
-            if (settings.sunIntensity > 2f) return dayLightColor;
-            else if (settings.sunIntensity > 1f) return sunsetLightColor;
-            else return nightLightColor;
+            EnsureInitialized();
+
+            level = Mathf.Clamp(level, 0, 3);
+
+            if (cloudTransitionRoutine != null)
+                StopCoroutine(cloudTransitionRoutine);
+
+            cloudTransitionRoutine = StartCoroutine(TransitionCloudsRoutine(level, Mathf.Max(0.01f, duration)));
+            return cloudTransitionRoutine;
         }
 
-        /// <summary>
-        /// Set a preset and begin transition
-        /// </summary>
+        public Light GetLight(TodState tod)
+        {
+            EnsureInitialized();
+            return directionalLight;
+        }
+
+        public Light GetShadowLight(TodState tod)
+        {
+            EnsureInitialized();
+            return shadowDirectionalLight;
+        }
+
+        public void SetMoonState(float state)
+        {
+            EnsureInitialized();
+
+            moonState = Mathf.Max(0f, state);
+            float pos = 0.1f - moonState * 0.8f;
+            if (moonAlphaNode != null)
+                moonAlphaNode.localPosition = new Vector3(0f, pos, 0f);
+
+            if (moonMaterial != null)
+                SetMaterialFloat(moonMaterial, "_MoonPhase", moonState);
+        }
+
+        public Coroutine TransitionMoon(float fromState, float toState, float duration = 10f)
+        {
+            EnsureInitialized();
+
+            if (moonTransitionRoutine != null)
+                StopCoroutine(moonTransitionRoutine);
+
+            moonTransitionRoutine = StartCoroutine(LerpFloatRoutine(fromState, toState, Mathf.Max(0.01f, duration), SetMoonState));
+            return moonTransitionRoutine;
+        }
+
+        public void SetMoonSize(float size)
+        {
+            EnsureInitialized();
+
+            moonSize = Mathf.Max(0f, size);
+            if (MoonModelRoot != null)
+                MoonModelRoot.transform.localScale = Vector3.one * (350f * moonSize);
+        }
+
+        public void SetMoonOverlayAlpha(float alpha)
+        {
+            EnsureInitialized();
+
+            moonOverlayAlpha = Mathf.Clamp01(alpha);
+            if (moonOverlayRoot != null)
+                moonOverlayRoot.gameObject.SetActive(moonOverlayAlpha > 0.01f);
+
+            if (moonOverlayMaterial != null)
+                SetMaterialColor(moonOverlayMaterial, "_Color", new Color(1f, 1f, 1f, moonOverlayAlpha));
+        }
+
+        public Coroutine TransitionMoonOverlayAlpha(float fromAlpha, float toAlpha, float duration = 10f)
+        {
+            EnsureInitialized();
+
+            if (moonOverlayTransitionRoutine != null)
+                StopCoroutine(moonOverlayTransitionRoutine);
+
+            moonOverlayTransitionRoutine = StartCoroutine(LerpFloatRoutine(fromAlpha, toAlpha, Mathf.Max(0.01f, duration), SetMoonOverlayAlpha));
+            return moonOverlayTransitionRoutine;
+        }
+
+        public Vector3 GetSunTrueAngle()
+        {
+            return BoundSunAngle(currentSunAngle);
+        }
+
+        public void SetSunLock(bool locked)
+        {
+            lockSunPosition = locked;
+        }
+
+        public void SetRelativeCompassH(float h)
+        {
+            EnsureInitialized();
+            RelativeCompassRoot.localEulerAngles = new Vector3(0f, h, 0f);
+        }
+
+        public void SetSunTrueAngle(Vector3 newHpr)
+        {
+            EnsureInitialized();
+
+            if (lockSunPosition)
+                return;
+
+            currentSunAngle = BoundSunAngle(newHpr);
+            Vector3 orbitPosition = PandaHprToUnityOrbitPosition(currentSunAngle, SunDepth);
+            currentReferenceSunHeight = orbitPosition.y * OverallScale;
+
+            if (sunWheelHeading != null)
+                sunWheelHeading.localRotation = Quaternion.identity;
+            if (sunWheelPitch != null)
+                sunWheelPitch.localRotation = Quaternion.identity;
+            if (sunWheelRoll != null)
+                sunWheelRoll.localRotation = Quaternion.identity;
+
+            if (SunLightAnchor != null)
+            {
+                SunLightAnchor.localPosition = orbitPosition;
+                if (orbitPosition.sqrMagnitude > 0.001f)
+                    SunLightAnchor.localRotation = Quaternion.LookRotation(orbitPosition.normalized, Vector3.up);
+            }
+
+            if (ShadowLightAnchor != null)
+            {
+                ShadowLightAnchor.localPosition = -orbitPosition;
+                if (orbitPosition.sqrMagnitude > 0.001f)
+                    ShadowLightAnchor.localRotation = Quaternion.LookRotation(-orbitPosition.normalized, Vector3.up);
+            }
+
+            UpdateCelestialVisibility();
+            ApplyDirectionalLightRotation();
+        }
+
+        public Coroutine TransitionSunAngle(Vector3 newHpr, float duration = 10f, bool fade = false)
+        {
+            return TransitionSunAngleFrom(currentSunAngle, newHpr, duration, fade);
+        }
+
+        private Coroutine TransitionSunAngleFrom(Vector3 sunDirLast, Vector3 newHpr, float duration, bool fade)
+        {
+            EnsureInitialized();
+
+            if (sunTransitionRoutine != null)
+                StopCoroutine(sunTransitionRoutine);
+
+            Vector3 start = FitAngleToDestination(sunDirLast, newHpr);
+            sunTransitionRoutine = StartCoroutine(TransitionSunAngleRoutine(start, newHpr, Mathf.Max(0.01f, duration), fade));
+            return sunTransitionRoutine;
+        }
+
+        public float ComputeShadowDarkness()
+        {
+            EnsureInitialized();
+
+            float lightHeight = currentReferenceSunHeight;
+            float minHeight = lightHeight > 0f ? 1500f : 3000f;
+            float maxDarkness = lightHeight > 0f ? 0.5f : 0.4f;
+            lightHeight = Mathf.Abs(lightHeight);
+            float heightDif = LightDepth - lightHeight - minHeight;
+            heightDif = Mathf.Min(heightDif, LightDepth - minHeight);
+            float heightProp = heightDif / (LightDepth - minHeight);
+            float inverseHeightProp = Mathf.Pow(Mathf.Max(1f - heightProp, 0f), 0.5f);
+            return 1f - inverseHeightProp * maxDarkness;
+        }
+
+        public void StashSun()
+        {
+            EnsureInitialized();
+            if (sunWheelHeading != null)
+                sunWheelHeading.gameObject.SetActive(false);
+        }
+
+        public void UnstashSun()
+        {
+            EnsureInitialized();
+            if (sunWheelHeading != null)
+                sunWheelHeading.gameObject.SetActive(true);
+        }
+
+        public void ApplyEnvironment(ReferenceEnvironmentSettings settings, bool immediate)
+        {
+            EnsureInitialized();
+
+            CurrentEnvironmentSettings = settings;
+
+            SetSky(settings.skyType);
+            SetSunTrueAngle(settings.direction);
+            SetMoonSize(settings.moonSize);
+            SetMoonState(settings.moonPhase);
+            SetMoonOverlayAlpha(settings.moonOverlay);
+            ApplyStarColor(settings.starColor);
+            ApplySceneLighting(settings);
+            ApplySceneFog(settings);
+            ApplyClearColor(CurrentSkySettings.clearColor);
+        }
+
+        public void ApplyTimeOfDay(float hour)
+        {
+            EnsureInitialized();
+
+            timeOfDay = NormalizeHour(hour);
+            ReferenceCycleSample sample = EvaluateReferenceCycle(timeOfDay);
+            CurrentCycleSample = sample;
+            CurrentEnvironmentSettings = sample.environment;
+            CurrentSkySettings = sample.skySettings;
+
+            ApplySkySettings(sample.skySettings);
+            LastSky = sample.environment.skyType;
+            if (LastSky != SkyType.Off)
+                previousAppliedSkyType = LastSky;
+
+            SetSunTrueAngle(sample.environment.direction);
+            SetMoonSize(sample.environment.moonSize);
+            SetMoonState(sample.environment.moonPhase);
+            SetMoonOverlayAlpha(sample.environment.moonOverlay);
+            ApplyStarColor(sample.environment.starColor);
+            ApplySceneLighting(sample.environment);
+            ApplySceneFog(sample.environment);
+            ApplyClearColor(sample.skySettings.clearColor);
+        }
+
         public void SetPreset(TODPreset preset)
         {
-            _fromSettings = currentSettings;
-            _toSettings = GetSettingsForPreset(preset);
-            _transitionTime = 0f;
-            _isTransitioning = true;
-            _previousPreset = preset;
-
-            Debug.Log($"SkyboxManager: Transitioning to {preset} preset");
+            useManualPreset = true;
+            currentPreset = preset;
+            manualSkyType = SkyTypeForPreset(preset);
+            ApplyEnvironment(GetEnvironmentForPreset(preset), true);
         }
 
-        /// <summary>
-        /// Get settings for a specific preset
-        /// </summary>
-        TODSettings GetSettingsForPreset(TODPreset preset)
+        public void SetManualSky(SkyType skyType)
+        {
+            useManualPreset = true;
+            manualSkyType = skyType;
+            ApplyEnvironment(GetEnvironmentForSkyType(skyType), true);
+        }
+
+        public void CreateSkyboxMaterial()
+        {
+            InitializeSky();
+        }
+
+        private void Awake()
+        {
+            BuildLocalSettings();
+        }
+
+        private void Start()
+        {
+            if (initializeOnStart)
+                InitializeSky();
+        }
+
+        private void OnDisable()
+        {
+            RestoreRenderSettingsSkybox();
+        }
+
+        private void OnDestroy()
+        {
+            DestroyRuntimeSky();
+            RestoreRenderSettingsSkybox();
+        }
+
+        private void Update()
+        {
+            if (!initialized)
+                return;
+
+            cloudScrollTime += Time.deltaTime;
+            ApplyCloudScroll();
+
+            if (useManualPreset)
+            {
+                if (currentPreset != previousPreset)
+                {
+                    SetPreset(currentPreset);
+                    previousPreset = currentPreset;
+                }
+                else if (LastSky != manualSkyType)
+                {
+                    ApplyEnvironment(GetEnvironmentForSkyType(manualSkyType), true);
+                }
+            }
+            else
+            {
+                if (autoAdvanceTime)
+                    timeOfDay = NormalizeHour(timeOfDay + Mathf.Max(0f, cycleSpeed) * timeSpeed * Time.deltaTime);
+
+                ApplyTimeOfDay(timeOfDay);
+            }
+        }
+
+        private void LateUpdate()
+        {
+            if (!initialized)
+                return;
+
+            if (Application.isPlaying && followMainCamera && Camera.main != null)
+            {
+                Vector3 cameraPosition = Camera.main.transform.position;
+                transform.position = new Vector3(cameraPosition.x, cameraPosition.y - 10f, cameraPosition.z);
+            }
+
+            EnsureCameraCanRenderSky();
+            FaceBillboardsToCamera();
+        }
+
+        private void EnsureInitialized()
+        {
+            if (!initialized)
+                InitializeSky();
+        }
+
+        private void BuildLocalSettings()
+        {
+            skySettingsByType.Clear();
+            foreach (KeyValuePair<SkyType, ReferenceSkySettings> pair in StaticSkySettings)
+                skySettingsByType[pair.Key] = pair.Value;
+        }
+
+        private void BuildSkyDome()
+        {
+            GameObject dome = InstantiateResource(ModelSkyDome, "PiratesSkyDome", SkyHandle);
+            sidesLayer = FindDeepChild(dome.transform, "Sides") ?? CreateFallbackLayer("Sides", SkyHandle, new Vector3(600f, 300f, 600f));
+            topLayer = FindDeepChild(dome.transform, "Top") ?? CreateFallbackLayer("Top", SkyHandle, new Vector3(600f, 600f, 600f));
+            horizonLayer = FindDeepChild(dome.transform, "Horizon") ?? CreateFallbackLayer("Horizon", SkyHandle, new Vector3(700f, 150f, 700f));
+            cloudsLayer = FindDeepChild(dome.transform, "CloudsTop") ?? CreateFallbackLayer("CloudsTop", SkyHandle, new Vector3(650f, 650f, 650f));
+
+            starsLayer = InstantiateResource(ModelStars, "stars", SkyHandle).transform;
+            _ = Resources.Load<GameObject>(ModelSkyDomeCards);
+
+            sidesMaterial = CreateLayerMaterial("POTCO Sides");
+            topMaterial = CreateLayerMaterial("POTCO Top");
+            horizonMaterial = CreateLayerMaterial("POTCO Horizon");
+            cloudsMaterial = CreateLayerMaterial("POTCO Clouds");
+            starsMaterial = CreateLayerMaterial("POTCO Stars");
+
+            AssignMaterialToRenderers(sidesLayer, sidesMaterial);
+            AssignMaterialToRenderers(topLayer, topMaterial);
+            AssignMaterialToRenderers(horizonLayer, horizonMaterial);
+            AssignMaterialToRenderers(cloudsLayer, cloudsMaterial);
+            AssignMaterialToRenderers(starsLayer, starsMaterial);
+
+            ConfigureLayerMaterial(horizonMaterial, "gradient", "transparent", "transparent", Color.clear, Color.clear, Color.white);
+            ConfigureLayerMaterial(starsMaterial, "stars", "transparent", "transparent", Color.clear, Color.clear, new Color(1f, 1f, 1f, 0.25f));
+        }
+
+        private void BuildCelestialHierarchy()
+        {
+            sunTrack = CreateChild(RelativeCompassRoot, "sunTrack");
+            sunWheelHeading = CreateChild(sunTrack, "sunWheelHeading");
+            sunWheelPitch = CreateChild(sunWheelHeading, "sunWheelPitch");
+            sunWheelRoll = CreateChild(sunWheelPitch, "sunWheelRoll");
+            SunLightAnchor = CreateChild(sunWheelRoll, "sunLight");
+            SunLightAnchor.localPosition = new Vector3(SunDepth, 0f, 0f);
+            SunLightAnchor.localEulerAngles = new Vector3(0f, 90f, 0f);
+
+            Transform internalSunLight = CreateChild(SunLightAnchor, "directionalLightSun");
+            Light dirSun = internalSunLight.gameObject.AddComponent<Light>();
+            dirSun.type = LightType.Directional;
+            dirSun.color = Color.white;
+            dirSun.intensity = 1f;
+            directionalLight ??= dirSun;
+
+            Transform grassLight = CreateChild(SunLightAnchor, "grassLight");
+            Light grass = grassLight.gameObject.AddComponent<Light>();
+            grass.type = LightType.Directional;
+            grass.color = Color.white;
+            grass.intensity = 0f;
+
+            Transform ambientLight = CreateChild(SunLightAnchor, "ambientLight");
+            Light ambient = ambientLight.gameObject.AddComponent<Light>();
+            ambient.type = LightType.Directional;
+            ambient.color = Color.white;
+            ambient.intensity = 0f;
+
+            ShadowLightAnchor = CreateChild(sunWheelRoll, "shadowLight");
+            ShadowLightAnchor.localPosition = new Vector3(-SunDepth, 0f, 0f);
+            ShadowLightAnchor.localEulerAngles = new Vector3(0f, -90f, 0f);
+
+            Transform internalShadowLight = CreateChild(ShadowLightAnchor, "directionalLightShadowSun");
+            Light dirShadow = internalShadowLight.gameObject.AddComponent<Light>();
+            dirShadow.type = LightType.Directional;
+            dirShadow.color = Color.white;
+            dirShadow.intensity = 1f;
+            shadowDirectionalLight ??= dirShadow;
+
+            sunModelRoot = InstantiateResource(ModelSun, "sun", SunLightAnchor).transform;
+            sunModelRoot.localScale = Vector3.one * 2700f;
+            sunMaterial = CreateAdditiveMaterial("POTCO Sun", "Sun", new Color(1f, 1f, 1f, 1f));
+            AssignMaterialToRenderers(sunModelRoot, sunMaterial);
+
+            MoonModelRoot = InstantiateResource(ModelMoon, "moon", internalShadowLight);
+            MoonModelRoot.transform.localScale = Vector3.one * 350f;
+            moonMaterial = CreateLayerMaterial("POTCO Moon");
+            ConfigureLayerMaterial(moonMaterial, "Moon", "transparent", "transparent", Color.clear, Color.clear, Color.white);
+            AssignMaterialToRenderers(MoonModelRoot.transform, moonMaterial);
+
+            moonGlowRoot = InstantiateResource(ModelSun, "moonGlow", MoonModelRoot.transform).transform;
+            moonGlowRoot.localPosition = new Vector3(0f, 0f, -0.2f);
+            moonGlowRoot.localScale = Vector3.one * 5f;
+            moonGlowMaterial = CreateAdditiveMaterial("POTCO Moon Glow", "Sun", new Color(0.7f, 0.8f, 1f, 1f));
+            AssignMaterialToRenderers(moonGlowRoot, moonGlowMaterial);
+
+            moonAlphaNode = CreateChild(MoonModelRoot.transform, "MoonAlphaNode");
+            SetMoonState(1f);
+
+            GameObject overlayCards = InstantiateResource(ModelEffectCards, "effectCards", MoonModelRoot.transform);
+            Transform overlay = FindDeepChild(overlayCards.transform, "effectJolly");
+            if (overlay != null)
+            {
+                overlay.SetParent(MoonModelRoot.transform, false);
+                DestroyUnityObject(overlayCards);
+            }
+            else
+            {
+                overlay = overlayCards.transform;
+            }
+
+            overlay.name = "effectJolly";
+            moonOverlayRoot = overlay;
+            moonOverlayRoot.localScale = Vector3.one * 0.9f;
+            moonOverlayMaterial = CreateLayerMaterial("POTCO Jolly Moon Overlay");
+            ConfigureLayerMaterial(moonOverlayMaterial, "effectJolly", "transparent", "transparent", Color.clear, Color.clear, new Color(1f, 1f, 1f, 0.25f));
+            AssignMaterialToRenderers(moonOverlayRoot, moonOverlayMaterial);
+            SetMoonOverlayAlpha(0f);
+
+            SetSunTrueAngle(new Vector3(0f, 30f, 245f));
+        }
+
+        private void DestroyRuntimeSky()
+        {
+            initialized = false;
+
+            if (skyTransitionRoutine != null) StopCoroutine(skyTransitionRoutine);
+            if (cloudTransitionRoutine != null) StopCoroutine(cloudTransitionRoutine);
+            if (sunTransitionRoutine != null) StopCoroutine(sunTransitionRoutine);
+            if (moonTransitionRoutine != null) StopCoroutine(moonTransitionRoutine);
+            if (moonOverlayTransitionRoutine != null) StopCoroutine(moonOverlayTransitionRoutine);
+
+            skyTransitionRoutine = null;
+            cloudTransitionRoutine = null;
+            sunTransitionRoutine = null;
+            moonTransitionRoutine = null;
+            moonOverlayTransitionRoutine = null;
+
+            if (SkyGroupRoot != null)
+                DestroyUnityObject(SkyGroupRoot);
+
+            SkyGroupRoot = null;
+            RelativeCompassRoot = null;
+            SkyHandle = null;
+            SunLightAnchor = null;
+            ShadowLightAnchor = null;
+            MoonModelRoot = null;
+            sidesLayer = null;
+            topLayer = null;
+            horizonLayer = null;
+            cloudsLayer = null;
+            starsLayer = null;
+
+            foreach (Material material in runtimeMaterials)
+            {
+                if (material != null)
+                    DestroyUnityObject(material);
+            }
+
+            runtimeMaterials.Clear();
+            sidesMaterial = null;
+            topMaterial = null;
+            horizonMaterial = null;
+            cloudsMaterial = null;
+            starsMaterial = null;
+            sunMaterial = null;
+            moonMaterial = null;
+            moonGlowMaterial = null;
+            moonOverlayMaterial = null;
+        }
+
+        private void ApplySkySettings(ReferenceSkySettings settings)
+        {
+            CurrentSkySettings = settings;
+
+            if (SkyGroupRoot != null)
+                SkyGroupRoot.SetActive(settings.skyType != SkyType.Off);
+
+            ConfigureLayerMaterial(
+                sidesMaterial,
+                CurrentCloudTextureName,
+                blendingCloudTextureName,
+                settings.sides.textureName,
+                new Color(cloudBlend, cloudBlend, cloudBlend, cloudBlend),
+                settings.sides.stageColor,
+                settings.sides.colorScale);
+
+            ConfigureLayerMaterial(
+                topMaterial,
+                settings.top.textureName,
+                "transparent",
+                "transparent",
+                Color.clear,
+                Color.clear,
+                settings.top.colorScale);
+
+            ConfigureLayerMaterial(
+                cloudsMaterial,
+                CurrentCloudTextureName,
+                blendingCloudTextureName,
+                "transparent",
+                new Color(cloudBlend, cloudBlend, cloudBlend, cloudBlend),
+                Color.clear,
+                settings.cloudsColorScale);
+
+            ConfigureLayerMaterial(
+                horizonMaterial,
+                "gradient",
+                "transparent",
+                "transparent",
+                Color.clear,
+                Color.clear,
+                settings.horizonColorScale);
+
+            ApplyClearColor(settings.clearColor);
+        }
+
+        private void ApplyCloudTexture(string baseTextureName, string blendTextureName, float blend)
+        {
+            cloudBlend = Mathf.Clamp01(blend);
+            blendingCloudTextureName = blendTextureName;
+
+            ReferenceSkySettings settings = CurrentSkySettings.skyType == 0 && LastSky != SkyType.Off
+                ? GetReferenceSkySettings(LastSky)
+                : CurrentSkySettings;
+
+            if (string.IsNullOrEmpty(settings.name))
+                settings = GetReferenceSkySettings(SkyType.Day);
+
+            ConfigureLayerMaterial(
+                sidesMaterial,
+                baseTextureName,
+                blendTextureName,
+                settings.sides.textureName,
+                new Color(cloudBlend, cloudBlend, cloudBlend, cloudBlend),
+                settings.sides.stageColor,
+                settings.sides.colorScale);
+
+            ConfigureLayerMaterial(
+                cloudsMaterial,
+                baseTextureName,
+                blendTextureName,
+                "transparent",
+                new Color(cloudBlend, cloudBlend, cloudBlend, cloudBlend),
+                Color.clear,
+                settings.cloudsColorScale);
+        }
+
+        private void ApplyCloudScroll()
+        {
+            Vector4 topScroll = new Vector4(cloudsTopScrollSpeed.x * cloudScrollTime, cloudsTopScrollSpeed.y * cloudScrollTime, 0f, 0f);
+            Vector4 sideScroll = new Vector4(sidesCloudScrollSpeed.x * cloudScrollTime, sidesCloudScrollSpeed.y * cloudScrollTime, 0f, 0f);
+            SetMaterialVector(sidesMaterial, "_UvScrollA", sideScroll);
+            SetMaterialVector(cloudsMaterial, "_UvScrollA", topScroll);
+        }
+
+        private void ApplyStarColor(Color starColor)
+        {
+            SetMaterialColor(starsMaterial, "_Color", starColor);
+        }
+
+        private void ApplySceneLighting(ReferenceEnvironmentSettings settings)
+        {
+            CurrentEnvironmentSettings = settings;
+
+            if (updateAmbientLight)
+            {
+                RenderSettings.ambientMode = AmbientMode.Flat;
+                RenderSettings.ambientLight = settings.ambientColor * Mathf.Clamp01(unityAmbientScale);
+            }
+
+            if (!updateDirectionalLight)
+                return;
+
+            if (directionalLight != null)
+            {
+                directionalLight.enabled = settings.lightSwitch.x > 0.5f;
+                directionalLight.color = SanitizeUnityLightColor(ComputeLightColor(settings.frontColor, settings.ambientColor, settings.lightSwitch));
+                directionalLight.intensity = unityDirectionalLightIntensity;
+            }
+
+            if (shadowDirectionalLight != null)
+            {
+                shadowDirectionalLight.enabled = settings.lightSwitch.z > 0.5f;
+                shadowDirectionalLight.color = SanitizeUnityLightColor(ComputeLightColor(settings.backColor, settings.ambientColor, settings.lightSwitch));
+                shadowDirectionalLight.intensity = unityDirectionalLightIntensity;
+            }
+
+            ApplyDirectionalLightRotation();
+        }
+
+        private void ApplySceneFog(ReferenceEnvironmentSettings settings)
+        {
+            if (!updateFog)
+                return;
+
+            RenderSettings.fog = enableFog && settings.fogType != ReferenceFogType.Off;
+            RenderSettings.fogColor = settings.fogColor;
+
+            switch (settings.fogType)
+            {
+                case ReferenceFogType.Exp:
+                    RenderSettings.fogMode = FogMode.Exponential;
+                    RenderSettings.fogDensity = settings.fogExp;
+                    break;
+                case ReferenceFogType.Linear:
+                    RenderSettings.fogMode = FogMode.Linear;
+                    RenderSettings.fogStartDistance = settings.fogLinearRange.x;
+                    RenderSettings.fogEndDistance = settings.fogLinearRange.y;
+                    break;
+                default:
+                    RenderSettings.fogMode = FogMode.Exponential;
+                    RenderSettings.fogDensity = 0f;
+                    break;
+            }
+        }
+
+        private void ApplyClearColor(Color clearColor)
+        {
+            if (updateRenderSettings)
+            {
+                CaptureRenderSettingsSkybox();
+                RenderSettings.skybox = null;
+            }
+
+            if (!updateMainCameraClearColor || Camera.main == null)
+                return;
+
+            Camera.main.clearFlags = CameraClearFlags.SolidColor;
+            Camera.main.backgroundColor = clearColor;
+        }
+
+        private void CaptureRenderSettingsSkybox()
+        {
+            if (capturedRenderSettingsSkybox)
+                return;
+
+            previousRenderSettingsSkybox = RenderSettings.skybox;
+            capturedRenderSettingsSkybox = true;
+        }
+
+        private void RestoreRenderSettingsSkybox()
+        {
+            if (!capturedRenderSettingsSkybox)
+                return;
+
+            RenderSettings.skybox = IsValidSkyboxMaterial(previousRenderSettingsSkybox) ? previousRenderSettingsSkybox : null;
+            previousRenderSettingsSkybox = null;
+            capturedRenderSettingsSkybox = false;
+        }
+
+        private static bool IsValidSkyboxMaterial(Material material)
+        {
+            if (material == null || material.shader == null)
+                return false;
+
+            return !material.shader.name.Contains("Hidden/InternalErrorShader", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void ApplyDirectionalLightRotation()
+        {
+            if (SunLightAnchor != null && directionalLight != null)
+            {
+                Vector3 dir = SunLightAnchor.position - transform.position;
+                if (dir.sqrMagnitude > 0.001f)
+                    directionalLight.transform.rotation = Quaternion.LookRotation(-dir.normalized, Vector3.up);
+            }
+
+            if (ShadowLightAnchor != null && shadowDirectionalLight != null)
+            {
+                Vector3 dir = ShadowLightAnchor.position - transform.position;
+                if (dir.sqrMagnitude > 0.001f)
+                    shadowDirectionalLight.transform.rotation = Quaternion.LookRotation(-dir.normalized, Vector3.up);
+            }
+        }
+
+        private void UpdateCelestialVisibility()
+        {
+            float sunHeight = currentReferenceSunHeight;
+
+            if (sunModelRoot != null)
+                sunModelRoot.gameObject.SetActive(sunHeight >= -6000f);
+
+            if (MoonModelRoot == null)
+                return;
+
+            const float moonAppearHeight = 3000f;
+            const float moonFadeHeight = 7000f;
+            float inverseSunHeight = -sunHeight;
+
+            if (inverseSunHeight < moonAppearHeight)
+            {
+                MoonModelRoot.SetActive(false);
+            }
+            else if (inverseSunHeight < moonFadeHeight)
+            {
+                MoonModelRoot.SetActive(true);
+                float fadeAmount = (inverseSunHeight - moonAppearHeight) / (moonFadeHeight - moonAppearHeight);
+                SetMaterialColor(moonMaterial, "_Color", new Color(1f, 1f, 1f, fadeAmount));
+            }
+            else
+            {
+                MoonModelRoot.SetActive(true);
+                SetMaterialColor(moonMaterial, "_Color", Color.white);
+            }
+        }
+
+        private IEnumerator TransitionSkyRoutine(SkyType skyTypeA, SkyType skyTypeB, float duration)
+        {
+            SetSky(skyTypeA);
+            ReferenceSkySettings fromSettings = GetReferenceSkySettings(skyTypeA);
+            ReferenceSkySettings toSettings = GetReferenceSkySettings(skyTypeB);
+
+            if (SkyGroupRoot != null)
+                SkyGroupRoot.SetActive(skyTypeB != SkyType.Off || skyTypeA != SkyType.Off);
+
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float t = Mathf.Clamp01(elapsed / duration);
+
+                ReferenceSkySettings blended = LerpSkySettings(fromSettings, toSettings, t);
+                CurrentSkySettings = blended;
+                ApplySkySettings(blended);
+
+                yield return null;
+            }
+
+            SetSky(skyTypeB);
+            skyTransitionRoutine = null;
+        }
+
+        private IEnumerator TransitionCloudsRoutine(int targetLevel, float duration)
+        {
+            string fromTexture = CurrentCloudTextureName;
+            string toTexture = GetCloudTextureName(targetLevel);
+            float elapsed = 0f;
+
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float t = Mathf.Clamp01(elapsed / duration);
+                ApplyCloudTexture(fromTexture, toTexture, t);
+                yield return null;
+            }
+
+            CurrentCloudLevel = targetLevel;
+            CurrentCloudTextureName = toTexture;
+            ApplyCloudTexture(toTexture, toTexture, 0f);
+            cloudTransitionRoutine = null;
+        }
+
+        private IEnumerator TransitionSunAngleRoutine(Vector3 start, Vector3 end, float duration, bool fade)
+        {
+            if (fade && sunTrack != null)
+                yield return LerpTransformAlphaRoutine(sunTrack, 1f, 0f, duration * 0.3f);
+
+            float angleDuration = fade ? duration * 0.4f : duration;
+            float elapsed = 0f;
+
+            while (elapsed < angleDuration)
+            {
+                elapsed += Time.deltaTime;
+                float t = Mathf.Clamp01(elapsed / angleDuration);
+                SetSunTrueAngle(Vector3.Lerp(start, end, t));
+                yield return null;
+            }
+
+            SetSunTrueAngle(end);
+
+            if (fade && sunTrack != null)
+                yield return LerpTransformAlphaRoutine(sunTrack, 0f, 1f, duration * 0.3f);
+
+            sunTransitionRoutine = null;
+        }
+
+        private IEnumerator LerpFloatRoutine(float from, float to, float duration, Action<float> setter)
+        {
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                setter(Mathf.Lerp(from, to, Mathf.Clamp01(elapsed / duration)));
+                yield return null;
+            }
+
+            setter(to);
+        }
+
+        private IEnumerator LerpTransformAlphaRoutine(Transform root, float from, float to, float duration)
+        {
+            if (duration <= 0f)
+                yield break;
+
+            Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float alpha = Mathf.Lerp(from, to, Mathf.Clamp01(elapsed / duration));
+                foreach (Renderer renderer in renderers)
+                {
+                    foreach (Material material in renderer.sharedMaterials)
+                    {
+                        if (material != null && material.HasProperty("_Color"))
+                        {
+                            Color color = material.GetColor("_Color");
+                            color.a = alpha;
+                            material.SetColor("_Color", color);
+                        }
+                    }
+                }
+                yield return null;
+            }
+        }
+
+        private ReferenceEnvironmentSettings GetEnvironmentForHour(float hour)
+        {
+            hour = NormalizeHour(hour);
+
+            if (hour < 4f)
+                return GetReferenceEnvironmentSettings(TodState.Stars);
+            if (hour < 9f)
+                return GetReferenceEnvironmentSettings(TodState.Dawn);
+            if (hour < 16f)
+                return GetReferenceEnvironmentSettings(TodState.Day);
+            if (hour < 20f)
+                return GetReferenceEnvironmentSettings(TodState.Dusk);
+
+            return GetReferenceEnvironmentSettings(TodState.Night);
+        }
+
+        private ReferenceEnvironmentSettings GetEnvironmentForPreset(TODPreset preset)
+        {
+            return GetReferenceEnvironmentSettings(StateForPreset(preset));
+        }
+
+        private ReferenceEnvironmentSettings GetEnvironmentForSkyType(SkyType skyType)
+        {
+            switch (skyType)
+            {
+                case SkyType.Dawn: return GetReferenceEnvironmentSettings(TodState.Dawn);
+                case SkyType.Day: return GetReferenceEnvironmentSettings(TodState.Day);
+                case SkyType.Dusk: return GetReferenceEnvironmentSettings(TodState.Dusk);
+                case SkyType.Night: return GetReferenceEnvironmentSettings(TodState.Night);
+                case SkyType.Stars: return GetReferenceEnvironmentSettings(TodState.Stars);
+                case SkyType.Halloween: return GetReferenceEnvironmentSettings(TodState.Halloween);
+                case SkyType.Swamp: return GetReferenceEnvironmentSettings(TodState.Swamp);
+                case SkyType.Invasion: return GetReferenceEnvironmentSettings(TodState.JollyInvasion);
+                case SkyType.Overcast:
+                    ReferenceEnvironmentSettings overcast = GetReferenceEnvironmentSettings(TodState.Swamp);
+                    overcast.skyType = SkyType.Overcast;
+                    return overcast;
+                case SkyType.OvercastNight:
+                    ReferenceEnvironmentSettings overcastNight = GetReferenceEnvironmentSettings(TodState.Night);
+                    overcastNight.skyType = SkyType.OvercastNight;
+                    return overcastNight;
+                case SkyType.Off:
+                    ReferenceEnvironmentSettings off = GetReferenceEnvironmentSettings(TodState.Base);
+                    off.skyType = SkyType.Off;
+                    off.fogType = ReferenceFogType.Off;
+                    return off;
+                default:
+                    return GetReferenceEnvironmentSettings(TodState.Day);
+            }
+        }
+
+        private static TodState StateForPreset(TODPreset preset)
         {
             switch (preset)
             {
-                case TODPreset.Day: return daySettings;
-                case TODPreset.Sunset: return sunsetSettings;
-                case TODPreset.Night: return nightSettings;
-                case TODPreset.Stars: return starsSettings;
-                case TODPreset.Overcast: return overcastSettings;
-                default: return daySettings;
+                case TODPreset.Sunset: return TodState.Dusk;
+                case TODPreset.Night: return TodState.Night;
+                case TODPreset.Stars: return TodState.Stars;
+                case TODPreset.Overcast: return TodState.Swamp;
+                case TODPreset.Day:
+                default:
+                    return TodState.Day;
             }
         }
 
-        /// <summary>
-        /// Lerp between two settings
-        /// </summary>
-        TODSettings LerpSettings(TODSettings from, TODSettings to, float t)
+        private static SkyType SkyTypeForPreset(TODPreset preset)
         {
-            TODSettings result = new TODSettings
+            switch (preset)
             {
-                name = to.name,
-                skyColorTopA = Color.Lerp(from.skyColorTopA, to.skyColorTopA, t),
-                skyColorTopB = Color.Lerp(from.skyColorTopB, to.skyColorTopB, t),
-                skyColorHorizonA = Color.Lerp(from.skyColorHorizonA, to.skyColorHorizonA, t),
-                skyColorHorizonB = Color.Lerp(from.skyColorHorizonB, to.skyColorHorizonB, t),
-                skyColorBottomA = Color.Lerp(from.skyColorBottomA, to.skyColorBottomA, t),
-                skyColorBottomB = Color.Lerp(from.skyColorBottomB, to.skyColorBottomB, t),
-                stageBlend = Mathf.Lerp(from.stageBlend, to.stageBlend, t),
-                cloudTexture = to.cloudTexture,
-                cloudIntensity = Mathf.Lerp(from.cloudIntensity, to.cloudIntensity, t),
-                cloudBlendAB = Mathf.Lerp(from.cloudBlendAB, to.cloudBlendAB, t),
-                starsIntensity = Mathf.Lerp(from.starsIntensity, to.starsIntensity, t),
-                starsScale = Mathf.Lerp(from.starsScale, to.starsScale, t),
-                sunIntensity = Mathf.Lerp(from.sunIntensity, to.sunIntensity, t),
-                sunSize = Mathf.Lerp(from.sunSize, to.sunSize, t),
-                sunGlowIntensity = Mathf.Lerp(from.sunGlowIntensity, to.sunGlowIntensity, t),
-                sunDirection = Vector3.Slerp(from.sunDirection, to.sunDirection, t),
-                moonIntensity = Mathf.Lerp(from.moonIntensity, to.moonIntensity, t),
-                moonSize = Mathf.Lerp(from.moonSize, to.moonSize, t),
-                moonGlowIntensity = Mathf.Lerp(from.moonGlowIntensity, to.moonGlowIntensity, t),
-                moonDirection = Vector3.Slerp(from.moonDirection, to.moonDirection, t),
-                brightness = Mathf.Lerp(from.brightness, to.brightness, t),
-                exposure = Mathf.Lerp(from.exposure, to.exposure, t),
-                contrast = Mathf.Lerp(from.contrast, to.contrast, t)
+                case TODPreset.Sunset: return SkyType.Dusk;
+                case TODPreset.Night: return SkyType.Night;
+                case TODPreset.Stars: return SkyType.Stars;
+                case TODPreset.Overcast: return SkyType.Overcast;
+                case TODPreset.Day:
+                default:
+                    return SkyType.Day;
+            }
+        }
+
+        private static ReferenceEnvironmentSettings CreateBaseEnvironment(TodState state)
+        {
+            return new ReferenceEnvironmentSettings(state)
+            {
+                direction = new Vector3(0f, 30f, 245f),
+                lightSwitch = Vector3.one,
+                frontColor = new Color(0f, 0f, 0f, 1f),
+                backColor = new Color(0f, 0f, 0f, 1f),
+                ambientColor = new Color(0f, 0f, 0f, 1f),
+                fogType = ReferenceFogType.Exp,
+                fogColor = new Color(0.25f, 0.25f, 0.25f, 0f),
+                fogExp = 0.0001f,
+                fogLinearRange = new Vector2(500f, 750f),
+                skyType = SkyType.Day,
+                starColor = new Color(1f, 1f, 1f, 0f),
+                moonSize = 1f,
+                moonOverlay = 0f,
+                moonPhase = 1f,
+                seaColor = new Color(0.2f, 0.2f, 0.2f, 1f),
+                seaColorShader = new Color(0.2f, 0.2f, 0.2f, 1f),
+                seaFactor = Vector3.one,
+                envEffect = 0
             };
-            return result;
         }
 
-        /// <summary>
-        /// Update sky colors based on time of day using preset library
-        /// </summary>
-        void UpdateSkyColorsForTime(float time)
+        private static Dictionary<SkyType, ReferenceSkySettings> BuildStaticSkySettings()
         {
-            Color topColor, horizonColor, bottomColor;
-            float stageBlend;
-
-            // Dawn (5-7): Night to Day transition
-            if (time >= 5f && time < 7f)
+            Dictionary<SkyType, ReferenceSkySettings> settings = new Dictionary<SkyType, ReferenceSkySettings>
             {
-                float t = (time - 5f) / 2f;
-                topColor = Color.Lerp(nightSettings.skyColorTopA, daySettings.skyColorTopA, t);
-                horizonColor = Color.Lerp(nightSettings.skyColorHorizonA, daySettings.skyColorHorizonA, t);
-                bottomColor = Color.Lerp(nightSettings.skyColorBottomA, daySettings.skyColorBottomA, t);
-                stageBlend = Mathf.Lerp(nightSettings.stageBlend, daySettings.stageBlend, t);
-            }
-            // Day (7-16): Use day preset
-            else if (time >= 7f && time < 16f)
-            {
-                topColor = daySettings.skyColorTopA;
-                horizonColor = daySettings.skyColorHorizonA;
-                bottomColor = daySettings.skyColorBottomA;
-                stageBlend = daySettings.stageBlend;
-            }
-            // Sunset (16-19): Day to Sunset transition
-            else if (time >= 16f && time < 19f)
-            {
-                float t = (time - 16f) / 3f;
-                topColor = Color.Lerp(daySettings.skyColorTopA, sunsetSettings.skyColorTopA, t);
-                horizonColor = Color.Lerp(daySettings.skyColorHorizonA, sunsetSettings.skyColorHorizonA, t);
-                bottomColor = Color.Lerp(daySettings.skyColorBottomA, sunsetSettings.skyColorBottomA, t);
-                stageBlend = Mathf.Lerp(daySettings.stageBlend, sunsetSettings.stageBlend, t);
-            }
-            // Dusk (19-21): Sunset to Night transition
-            else if (time >= 19f && time < 21f)
-            {
-                float t = (time - 19f) / 2f;
-                topColor = Color.Lerp(sunsetSettings.skyColorTopA, nightSettings.skyColorTopA, t);
-                horizonColor = Color.Lerp(sunsetSettings.skyColorHorizonA, nightSettings.skyColorHorizonA, t);
-                bottomColor = Color.Lerp(sunsetSettings.skyColorBottomA, nightSettings.skyColorBottomA, t);
-                stageBlend = Mathf.Lerp(sunsetSettings.stageBlend, nightSettings.stageBlend, t);
-            }
-            // Night (21-5): Use night preset
-            else
-            {
-                topColor = nightSettings.skyColorTopA;
-                horizonColor = nightSettings.skyColorHorizonA;
-                bottomColor = nightSettings.skyColorBottomA;
-                stageBlend = nightSettings.stageBlend;
-            }
-
-            // Apply colors
-            skyboxMaterial.SetColor("_SkyColorTopA", topColor);
-            skyboxMaterial.SetColor("_SkyColorHorizonA", horizonColor);
-            skyboxMaterial.SetColor("_SkyColorBottomA", bottomColor);
-            skyboxMaterial.SetFloat("_StageBlend", stageBlend);
-        }
-
-        /// <summary>
-        /// Calculate sun direction based on time of day (0-24 hours)
-        /// Sun rises at 6:00, peaks at 12:00, sets at 18:00
-        /// </summary>
-        Vector3 CalculateSunDirection(float time)
-        {
-            // Convert time to angle (0-360 degrees)
-            // Sun at horizon at 6:00 and 18:00, peak at 12:00
-            float sunAngle = ((time - 6f) / 12f) * 180f; // 0° at sunrise, 180° at sunset
-            float sunAngleRad = sunAngle * Mathf.Deg2Rad;
-
-            // Calculate position on arc
-            float x = Mathf.Sin(sunAngleRad) * 0.5f; // East-West movement
-            float y = Mathf.Cos(sunAngleRad); // Up-Down movement
-            float z = 1f; // Forward component for skybox projection
-
-            // During night (before 6 or after 18), sun is below horizon
-            if (time < 6f || time > 18f)
-            {
-                y = -Mathf.Abs(y); // Keep sun below horizon
-            }
-
-            return new Vector3(x, y, z).normalized;
-        }
-
-        /// <summary>
-        /// Calculate moon direction based on time of day (0-24 hours)
-        /// Moon rises at 18:00, peaks at 0:00, sets at 6:00 (opposite of sun)
-        /// </summary>
-        Vector3 CalculateMoonDirection(float time)
-        {
-            // Moon is 12 hours offset from sun
-            float moonTime = time + 12f;
-            if (moonTime >= 24f) moonTime -= 24f;
-
-            // Convert time to angle
-            float moonAngle = ((moonTime - 6f) / 12f) * 180f;
-            float moonAngleRad = moonAngle * Mathf.Deg2Rad;
-
-            // Calculate position on arc (opposite side of sky from sun)
-            float x = -Mathf.Sin(moonAngleRad) * 0.5f; // Opposite East-West
-            float y = Mathf.Cos(moonAngleRad); // Up-Down movement
-            float z = -1f; // Opposite forward component
-
-            // During day (between 6 and 18), moon is below horizon or faint
-            if (moonTime < 6f || moonTime > 18f)
-            {
-                y = -Mathf.Abs(y); // Keep moon below horizon during its "day"
-            }
-
-            return new Vector3(x, y, z).normalized;
-        }
-
-        /// <summary>
-        /// Create skybox material and load all POTCO textures from Resources.
-        /// </summary>
-        public void CreateSkyboxMaterial()
-        {
-            Shader skyboxShader = Shader.Find("Skybox/POTCO Sky");
-            if (skyboxShader == null)
-            {
-                Debug.LogError("SkyboxManager: Could not find Skybox/POTCO Sky shader!");
-                return;
-            }
-
-            skyboxMaterial = new Material(skyboxShader);
-            skyboxMaterial.name = "POTCO Skybox";
-
-            // Load cloud textures - use all three layers for POTCO multi-layer system
-            Texture2D cloudTexA = Resources.Load<Texture2D>("phase_2/maps/clouds_heavy");
-            if (cloudTexA != null)
-            {
-                skyboxMaterial.SetTexture("_CloudLayerA", cloudTexA);
-                Debug.Log("SkyboxManager: Loaded clouds_heavy for Layer A");
-            }
-            else
-            {
-                Debug.LogWarning("SkyboxManager: Could not load clouds_heavy texture");
-            }
-
-            Texture2D cloudTexB = Resources.Load<Texture2D>("phase_2/maps/clouds_medium");
-            if (cloudTexB != null)
-            {
-                skyboxMaterial.SetTexture("_CloudLayerB", cloudTexB);
-                Debug.Log("SkyboxManager: Loaded clouds_medium for Layer B");
-            }
-            else
-            {
-                Debug.LogWarning("SkyboxManager: Could not load clouds_medium texture");
-            }
-
-            Texture2D cloudTexC = Resources.Load<Texture2D>("phase_2/maps/clouds_light");
-            if (cloudTexC != null)
-            {
-                skyboxMaterial.SetTexture("_CloudLayerC", cloudTexC);
-                Debug.Log("SkyboxManager: Loaded clouds_light for Layer C");
-            }
-            else
-            {
-                Debug.LogWarning("SkyboxManager: Could not load clouds_light texture");
-            }
-
-            // Load stars
-            Texture2D starsTex = Resources.Load<Texture2D>("phase_2/maps/stars");
-            if (starsTex != null)
-            {
-                skyboxMaterial.SetTexture("_StarsTex", starsTex);
-            }
-
-            // Load sun
-            Texture2D sunTex = Resources.Load<Texture2D>("phase_2/maps/Sun");
-            if (sunTex != null)
-            {
-                skyboxMaterial.SetTexture("_SunTex", sunTex);
-            }
-
-            // Load moon
-            Texture2D moonTex = Resources.Load<Texture2D>("phase_2/maps/Moon");
-            if (moonTex != null)
-            {
-                skyboxMaterial.SetTexture("_MoonTex", moonTex);
-            }
-
-            // Set default animation speeds and cloud scale
-            skyboxMaterial.SetVector("_CloudSpeedA", cloudSpeedA);
-            skyboxMaterial.SetVector("_CloudSpeedB", cloudSpeedB);
-            skyboxMaterial.SetFloat("_CloudScale", cloudScale);
-
-            Debug.Log("SkyboxManager: Skybox material created");
-        }
-
-        void ApplySettings(TODSettings settings, bool immediate)
-        {
-            if (skyboxMaterial == null) return;
-
-            // Sky colors - Stage A/B system
-            skyboxMaterial.SetColor("_SkyColorTopA", settings.skyColorTopA);
-            skyboxMaterial.SetColor("_SkyColorTopB", settings.skyColorTopB);
-            skyboxMaterial.SetColor("_SkyColorHorizonA", settings.skyColorHorizonA);
-            skyboxMaterial.SetColor("_SkyColorHorizonB", settings.skyColorHorizonB);
-            skyboxMaterial.SetColor("_SkyColorBottomA", settings.skyColorBottomA);
-            skyboxMaterial.SetColor("_SkyColorBottomB", settings.skyColorBottomB);
-            skyboxMaterial.SetFloat("_StageBlend", settings.stageBlend);
-
-            // Clouds
-            if (immediate && !string.IsNullOrEmpty(settings.cloudTexture))
-            {
-                Texture2D cloudTex = Resources.Load<Texture2D>($"phase_2/maps/{settings.cloudTexture}");
-                if (cloudTex != null)
                 {
-                    skyboxMaterial.SetTexture("_CloudLayerA", cloudTex);
+                    SkyType.Off,
+                    new ReferenceSkySettings(
+                        SkyType.Off,
+                        "Off",
+                        new ReferenceSkyLayer("transparent", string.Empty, Color.clear, new Color(0f, 0f, 0f, 1f)),
+                        new ReferenceSkyLayer("opaque", string.Empty, Color.clear, new Color(0f, 0f, 0f, 1f)),
+                        new Color(0f, 0f, 0f, 1f),
+                        new Color(0f, 0f, 0f, 1f),
+                        new Color(0f, 0f, 0f, 1f))
+                },
+                {
+                    SkyType.Dawn,
+                    new ReferenceSkySettings(
+                        SkyType.Dawn,
+                        "Dawn",
+                        new ReferenceSkyLayer("transparent", string.Empty, Color.clear, new Color(0.8f, 0.5f, 0.2f, 1f)),
+                        new ReferenceSkyLayer("opaque", string.Empty, Color.clear, new Color(0.4f, 0.58f, 0.6f, 1f)),
+                        new Color(0.8f, 0.8f, 0.6f, 1f),
+                        new Color(0.29f, 0.32f, 0.44f, 1f),
+                        new Color(0.72f, 0.72f, 0.52f, 1f))
+                },
+                {
+                    SkyType.Day,
+                    new ReferenceSkySettings(
+                        SkyType.Day,
+                        "Day",
+                        new ReferenceSkyLayer("transparent", string.Empty, Color.clear, new Color(1f, 1f, 1f, 0.7f)),
+                        new ReferenceSkyLayer("opaque", string.Empty, Color.clear, new Color(0.45f, 0.55f, 0.7f, 0f)),
+                        new Color(1f, 1f, 1f, 1f),
+                        new Color(0.6f, 0.7f, 0.9f, 1f),
+                        new Color(0.4f, 0.6f, 0.85f, 1f))
+                },
+                {
+                    SkyType.Dusk,
+                    new ReferenceSkySettings(
+                        SkyType.Dusk,
+                        "Dusk",
+                        new ReferenceSkyLayer("transparent", string.Empty, Color.clear, new Color(0.6f, 0.365f, 0.325f, 1f)),
+                        new ReferenceSkyLayer("opaque", string.Empty, Color.clear, new Color(0.45f, 0.4f, 0.52f, 1f)),
+                        new Color(0.75f, 0.35f, 0.22f, 1f),
+                        new Color(0.46f, 0.38f, 0.43f, 1f),
+                        new Color(0.65f, 0.55f, 0.5f, 1f))
+                },
+                {
+                    SkyType.Night,
+                    new ReferenceSkySettings(
+                        SkyType.Night,
+                        "Night",
+                        new ReferenceSkyLayer("stars", string.Empty, new Color(0.1f, 0.1f, 0.1f, 0.1f), new Color(0.36f, 0.48f, 0.74f, 0.8f)),
+                        new ReferenceSkyLayer("stars", string.Empty, Color.clear, new Color(0.36f, 0.48f, 0.74f, 0.2f)),
+                        new Color(0.34f, 0.45f, 0.7f, 0.8f),
+                        new Color(0.11f, 0.18f, 0.33f, 1f),
+                        new Color(0.075f, 0.13f, 0.26f, 1f))
+                },
+                {
+                    SkyType.Stars,
+                    new ReferenceSkySettings(
+                        SkyType.Stars,
+                        "Stars",
+                        new ReferenceSkyLayer("stars", string.Empty, new Color(0.85f, 0.8f, 0.5f, 0.5f), new Color(1f, 1f, 1f, 1f)),
+                        new ReferenceSkyLayer("stars", string.Empty, Color.clear, new Color(1f, 1f, 1f, 1f)),
+                        new Color(0.45f, 0.45f, 0.7f, 0.6f),
+                        new Color(0.09f, 0.09f, 0.24f, 1f),
+                        new Color(0.0225f, 0.039f, 0.078f, 0.3f))
+                },
+                {
+                    SkyType.Halloween,
+                    new ReferenceSkySettings(
+                        SkyType.Halloween,
+                        "Halloween",
+                        new ReferenceSkyLayer("stars", string.Empty, new Color(0f, 0f, 0f, 0.2f), new Color(0.5f, 0.6f, 0.15f, 1f)),
+                        new ReferenceSkyLayer("stars", string.Empty, Color.clear, new Color(1f, 1f, 1f, 0.4f)),
+                        new Color(0.5f, 0.6f, 0.15f, 1f),
+                        new Color(0.1f, 0.12f, 0.03f, 1f),
+                        new Color(0.075f, 0.05f, 0.12f, 1f))
+                },
+                {
+                    SkyType.Swamp,
+                    new ReferenceSkySettings(
+                        SkyType.Swamp,
+                        "Swamp",
+                        new ReferenceSkyLayer("transparent", string.Empty, Color.clear, new Color(0.35f, 0.5f, 0.6f, 1f)),
+                        new ReferenceSkyLayer("opaque", string.Empty, Color.clear, new Color(0.35f, 0.5f, 0.6f, 0f)),
+                        new Color(0.35f, 0.5f, 0.6f, 1f),
+                        new Color(0.15f, 0.2f, 0.35f, 1f),
+                        new Color(0.2f, 0.25f, 0.3f, 1f))
+                },
+                {
+                    SkyType.Invasion,
+                    new ReferenceSkySettings(
+                        SkyType.Invasion,
+                        "Invasion",
+                        new ReferenceSkyLayer("stars", string.Empty, new Color(0f, 0f, 0f, 0.2f), new Color(0.15f, 0.18f, 0.06f, 1f)),
+                        new ReferenceSkyLayer("stars", string.Empty, Color.clear, new Color(1f, 1f, 1f, 0.4f)),
+                        new Color(0.15f, 0.18f, 0.06f, 1f),
+                        new Color(0.1f, 0.12f, 0.03f, 1f),
+                        new Color(0.1f, 0.12f, 0.04f, 1f))
+                },
+                {
+                    SkyType.Overcast,
+                    new ReferenceSkySettings(
+                        SkyType.Overcast,
+                        "Overcast",
+                        new ReferenceSkyLayer("transparent", string.Empty, Color.clear, new Color(0.34f, 0.32f, 0.25f, 1f)),
+                        new ReferenceSkyLayer("opaque", string.Empty, Color.clear, new Color(0.42f, 0.42f, 0.38f, 1f)),
+                        new Color(0.21f, 0.2f, 0.2f, 1f),
+                        new Color(0.34f, 0.32f, 0.25f, 1f),
+                        new Color(0.35f, 0.36f, 0.38f, 1f))
+                },
+                {
+                    SkyType.OvercastNight,
+                    new ReferenceSkySettings(
+                        SkyType.OvercastNight,
+                        "OvercastNight",
+                        new ReferenceSkyLayer("transparent", string.Empty, Color.clear, new Color(0.12f, 0.22f, 0.25f, 1f)),
+                        new ReferenceSkyLayer("opaque", string.Empty, Color.clear, new Color(0f, 0f, 0f, 0f)),
+                        new Color(0.12f, 0.21f, 0.25f, 1f),
+                        new Color(0.12f, 0.21f, 0.25f, 1f),
+                        new Color(0.06f, 0.11f, 0.16f, 1f))
                 }
-            }
-
-            // Cloud Intensity - check for override
-            float cloudIntensity = cloudIntensityOverride > 0f ? cloudIntensityOverride : settings.cloudIntensity;
-            skyboxMaterial.SetFloat("_CloudIntensity", cloudIntensity);
-            skyboxMaterial.SetFloat("_CloudBlendAB", settings.cloudBlendAB);
-
-            // Stars - check for overrides (-1 means use preset)
-            float starsIntensity = starsIntensityOverride >= 0f ? starsIntensityOverride : settings.starsIntensity;
-            float starsScale = starsScaleOverride >= 0f ? starsScaleOverride : settings.starsScale;
-
-            skyboxMaterial.SetFloat("_StarsIntensity", starsIntensity);
-            skyboxMaterial.SetFloat("_StarsScale", starsScale);
-
-            // Stars fade settings - control how stars fade with sun position
-            skyboxMaterial.SetFloat("_StarsFadeStart", starsFadeStart);
-            skyboxMaterial.SetFloat("_StarsFadeEnd", starsFadeEnd);
-
-            // Height-based fading control (0=disabled/stars everywhere, 1=full fade near horizon)
-            skyboxMaterial.SetFloat("_StarsHeightFade", enableStarsHeightFade ? 1.0f : 0.0f);
-
-            // Sun
-            skyboxMaterial.SetFloat("_SunIntensity", settings.sunIntensity);
-            skyboxMaterial.SetFloat("_SunSize", settings.sunSize);
-            skyboxMaterial.SetFloat("_SunGlowIntensity", settings.sunGlowIntensity);
-            skyboxMaterial.SetVector("_SunDirection", settings.sunDirection.normalized);
-
-            // Moon
-            skyboxMaterial.SetFloat("_MoonIntensity", settings.moonIntensity);
-            skyboxMaterial.SetFloat("_MoonSize", settings.moonSize);
-            skyboxMaterial.SetFloat("_MoonGlowIntensity", settings.moonGlowIntensity);
-            skyboxMaterial.SetVector("_MoonDirection", settings.moonDirection.normalized);
-
-            // Overall - check for overrides
-            float brightness = brightnessOverride > 0f ? brightnessOverride : settings.brightness;
-            float exposure = exposureOverride > 0f ? exposureOverride : settings.exposure;
-
-            skyboxMaterial.SetFloat("_Brightness", brightness);
-            skyboxMaterial.SetFloat("_Exposure", exposure);
-            skyboxMaterial.SetFloat("_Contrast", settings.contrast);
-        }
-
-
-        /// <summary>
-        /// Save all skybox settings to JSON file
-        /// </summary>
-        public void SaveSettingsToJson(string filePath)
-        {
-            SkyboxSettingsData data = new SkyboxSettingsData
-            {
-                // Cloud Settings
-                cloudSpeedA = this.cloudSpeedA,
-                cloudSpeedB = this.cloudSpeedB,
-                cloudScale = this.cloudScale,
-
-                // Light Settings
-                updateDirectionalLight = this.updateDirectionalLight,
-                minLightIntensity = this.minLightIntensity,
-                maxLightIntensity = this.maxLightIntensity,
-                dayLightColor = this.dayLightColor,
-                sunsetLightColor = this.sunsetLightColor,
-                nightLightColor = this.nightLightColor,
-                updateAmbientLight = this.updateAmbientLight,
-                ambientIntensity = this.ambientIntensity,
-
-                // Transition Settings
-                transitionDuration = this.transitionDuration,
-
-                // Day/Night Cycle Settings
-                timeOfDay = this.timeOfDay,
-                timeSpeed = this.timeSpeed,
-                autoAdvanceTime = this.autoAdvanceTime,
-
-                // Override Settings
-                brightnessOverride = this.brightnessOverride,
-                exposureOverride = this.exposureOverride,
-                cloudIntensityOverride = this.cloudIntensityOverride,
-                starsIntensityOverride = this.starsIntensityOverride,
-
-                // Presets
-                daySettings = this.daySettings,
-                sunsetSettings = this.sunsetSettings,
-                nightSettings = this.nightSettings,
-                starsSettings = this.starsSettings,
-                overcastSettings = this.overcastSettings
             };
 
-            string json = JsonUtility.ToJson(data, true);
-            System.IO.File.WriteAllText(filePath, json);
-            Debug.Log($"Skybox settings saved to: {filePath}");
+            return settings;
         }
 
-        /// <summary>
-        /// Load all skybox settings from JSON file
-        /// </summary>
-        public void LoadSettingsFromJson(string filePath)
+        private static ReferenceSkySettings LerpSkySettings(ReferenceSkySettings a, ReferenceSkySettings b, float t)
         {
-            if (!System.IO.File.Exists(filePath))
+            return new ReferenceSkySettings(
+                b.skyType,
+                b.name,
+                new ReferenceSkyLayer(
+                    b.sides.textureName,
+                    b.sides.texcoordName,
+                    Color.Lerp(a.sides.stageColor, b.sides.stageColor, t),
+                    Color.Lerp(a.sides.colorScale, b.sides.colorScale, t)),
+                new ReferenceSkyLayer(
+                    b.top.textureName,
+                    b.top.texcoordName,
+                    Color.Lerp(a.top.stageColor, b.top.stageColor, t),
+                    Color.Lerp(a.top.colorScale, b.top.colorScale, t)),
+                Color.Lerp(a.cloudsColorScale, b.cloudsColorScale, t),
+                Color.Lerp(a.horizonColorScale, b.horizonColorScale, t),
+                Color.Lerp(a.clearColor, b.clearColor, t));
+        }
+
+        private static ReferenceEnvironmentSettings LerpEnvironmentSettings(
+            ReferenceEnvironmentSettings from,
+            ReferenceEnvironmentSettings to,
+            float transitionT,
+            float sunT)
+        {
+            ReferenceEnvironmentSettings settings = to;
+            settings.direction = LerpAngleVector(from.direction, to.direction, sunT);
+            settings.lightSwitch = to.lightSwitch;
+            settings.frontColor = Color.Lerp(from.frontColor, to.frontColor, transitionT);
+            settings.backColor = Color.Lerp(from.backColor, to.backColor, transitionT);
+            settings.ambientColor = Color.Lerp(from.ambientColor, to.ambientColor, transitionT);
+            settings.fogType = to.fogType;
+            settings.fogColor = Color.Lerp(from.fogColor, to.fogColor, transitionT);
+            settings.fogExp = Mathf.Lerp(from.fogExp, to.fogExp, transitionT);
+            settings.fogLinearRange = Vector2.Lerp(from.fogLinearRange, to.fogLinearRange, transitionT);
+            settings.skyType = to.skyType;
+            settings.starColor = Color.Lerp(from.starColor, to.starColor, transitionT);
+            settings.moonSize = Mathf.Lerp(from.moonSize, to.moonSize, transitionT);
+            settings.moonOverlay = Mathf.Lerp(from.moonOverlay, to.moonOverlay, transitionT);
+            settings.moonPhase = Mathf.Lerp(from.moonPhase, to.moonPhase, transitionT);
+            settings.seaColor = Color.Lerp(from.seaColor, to.seaColor, transitionT);
+            settings.seaColorShader = Color.Lerp(from.seaColorShader, to.seaColorShader, transitionT);
+            settings.seaFactor = Vector3.Lerp(from.seaFactor, to.seaFactor, transitionT);
+            settings.envEffect = to.envEffect;
+            return settings;
+        }
+
+        private static Vector3 LerpAngleVector(Vector3 from, Vector3 to, float t)
+        {
+            return new Vector3(
+                Mathf.LerpAngle(from.x, to.x, t),
+                Mathf.LerpAngle(from.y, to.y, t),
+                Mathf.LerpAngle(from.z, to.z, t));
+        }
+
+        private static Vector3 PandaHprToUnityOrbitPosition(Vector3 hpr, float depth)
+        {
+            Quaternion pandaRotation =
+                Quaternion.AngleAxis(hpr.x, Vector3.forward) *
+                Quaternion.AngleAxis(hpr.y, Vector3.right) *
+                Quaternion.AngleAxis(hpr.z, Vector3.up);
+
+            Vector3 pandaPosition = pandaRotation * new Vector3(depth, 0f, 0f);
+            return new Vector3(pandaPosition.x, pandaPosition.z, pandaPosition.y);
+        }
+
+        private static Color ComputeLightColor(Color lightColor, Color ambientColor, Vector3 lightSwitch)
+        {
+            Color value = lightSwitch.y > 0.5f ? lightColor - ambientColor : lightColor;
+            value.a = 1f;
+            return value;
+        }
+
+        private static Color SanitizeUnityLightColor(Color color)
+        {
+            return new Color(
+                Mathf.Max(0f, color.r),
+                Mathf.Max(0f, color.g),
+                Mathf.Max(0f, color.b),
+                Mathf.Clamp01(color.a));
+        }
+
+        private static Vector3 BoundSunAngle(Vector3 direction)
+        {
+            return new Vector3(BoundAngle(direction.x), BoundAngle(direction.y), BoundAngle(direction.z));
+        }
+
+        private static float BoundAngle(float value)
+        {
+            while (value > 360f) value -= 360f;
+            while (value < 0f) value += 360f;
+            return value;
+        }
+
+        private static Vector3 FitAngleToDestination(Vector3 start, Vector3 destination)
+        {
+            return new Vector3(
+                FitSingleAngle(start.x, destination.x),
+                FitSingleAngle(start.y, destination.y),
+                FitSingleAngle(start.z, destination.z));
+        }
+
+        private static float FitSingleAngle(float start, float destination)
+        {
+            float delta = Mathf.DeltaAngle(start, destination);
+            return destination - delta;
+        }
+
+        private static float NormalizeHour(float hour)
+        {
+            while (hour >= 24f) hour -= 24f;
+            while (hour < 0f) hour += 24f;
+            return hour;
+        }
+
+        private static string GetCloudTextureName(int level)
+        {
+            switch (level)
             {
-                Debug.LogError($"Settings file not found: {filePath}");
+                case 0: return "transparent";
+                case 1: return "clouds_light";
+                case 2: return "clouds_medium";
+                case 3: return "clouds_heavy";
+                default: return "clouds_light";
+            }
+        }
+
+        private Transform CreateChild(Transform parent, string childName)
+        {
+            GameObject child = new GameObject(childName);
+            child.transform.SetParent(parent, false);
+            return child.transform;
+        }
+
+        private GameObject InstantiateResource(string resourcePath, string fallbackName, Transform parent)
+        {
+            GameObject prefab = Resources.Load<GameObject>(resourcePath);
+            if (prefab != null)
+            {
+                GameObject instance = Instantiate(prefab, parent, false);
+                instance.name = fallbackName;
+                ConfigureRenderers(instance.transform);
+                return instance;
+            }
+
+            Debug.LogWarning($"SkyboxManager: Missing Resources/{resourcePath}. Created fallback object '{fallbackName}'.");
+            GameObject fallback = new GameObject(fallbackName);
+            fallback.transform.SetParent(parent, false);
+            return fallback;
+        }
+
+        private Transform CreateFallbackLayer(string layerName, Transform parent, Vector3 scale)
+        {
+            GameObject layer = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            layer.name = layerName;
+            layer.transform.SetParent(parent, false);
+            layer.transform.localScale = scale;
+
+            Collider collider = layer.GetComponent<Collider>();
+            if (collider != null)
+                DestroyUnityObject(collider);
+
+            ConfigureRenderers(layer.transform);
+            return layer.transform;
+        }
+
+        private static Transform FindDeepChild(Transform root, string childName)
+        {
+            if (root == null)
+                return null;
+
+            if (root.name == childName)
+                return root;
+
+            foreach (Transform child in root)
+            {
+                Transform found = FindDeepChild(child, childName);
+                if (found != null)
+                    return found;
+            }
+
+            return null;
+        }
+
+        private Material CreateLayerMaterial(string materialName)
+        {
+            Shader shader = Shader.Find("POTCO/Reference Sky Layer");
+            if (shader == null)
+                shader = Shader.Find("Unlit/Texture");
+
+            Material material = new Material(shader)
+            {
+                name = materialName,
+                hideFlags = HideFlags.DontSave
+            };
+            runtimeMaterials.Add(material);
+            return material;
+        }
+
+        private Material CreateAdditiveMaterial(string materialName, string textureName, Color color)
+        {
+            Shader shader = Shader.Find("POTCO/Reference Sky Additive");
+            if (shader == null)
+                shader = Shader.Find("Unlit/Transparent");
+
+            Material material = new Material(shader)
+            {
+                name = materialName,
+                hideFlags = HideFlags.DontSave
+            };
+
+            SetMaterialTexture(material, "_MainTex", LoadTexture(textureName));
+            SetMaterialTexture(material, "_BaseTex", LoadTexture(textureName));
+            SetMaterialColor(material, "_Color", color);
+            runtimeMaterials.Add(material);
+            return material;
+        }
+
+        private void ConfigureLayerMaterial(
+            Material material,
+            string baseTextureName,
+            string blendTextureName,
+            string overlayTextureName,
+            Color baseBlendColor,
+            Color overlayBlendColor,
+            Color color)
+        {
+            if (material == null)
                 return;
-            }
 
-            string json = System.IO.File.ReadAllText(filePath);
-            SkyboxSettingsData data = JsonUtility.FromJson<SkyboxSettingsData>(json);
+            Texture2D baseTexture = LoadTexture(baseTextureName);
+            Texture2D blendTexture = LoadTexture(blendTextureName);
+            Texture2D overlayTexture = LoadTexture(overlayTextureName);
+            Texture2D alphaTexture = LoadAlphaTexture(baseTextureName);
 
-            // Cloud Settings
-            this.cloudSpeedA = data.cloudSpeedA;
-            this.cloudSpeedB = data.cloudSpeedB;
-            this.cloudScale = data.cloudScale;
-
-            // Light Settings
-            this.updateDirectionalLight = data.updateDirectionalLight;
-            this.minLightIntensity = data.minLightIntensity;
-            this.maxLightIntensity = data.maxLightIntensity;
-            this.dayLightColor = data.dayLightColor;
-            this.sunsetLightColor = data.sunsetLightColor;
-            this.nightLightColor = data.nightLightColor;
-            this.updateAmbientLight = data.updateAmbientLight;
-            this.ambientIntensity = data.ambientIntensity;
-
-            // Transition Settings
-            this.transitionDuration = data.transitionDuration;
-
-            // Day/Night Cycle Settings
-            this.timeOfDay = data.timeOfDay;
-            this.timeSpeed = data.timeSpeed;
-            this.autoAdvanceTime = data.autoAdvanceTime;
-
-            // Override Settings
-            this.brightnessOverride = data.brightnessOverride;
-            this.exposureOverride = data.exposureOverride;
-            this.cloudIntensityOverride = data.cloudIntensityOverride;
-            this.starsIntensityOverride = data.starsIntensityOverride;
-
-            // Presets
-            this.daySettings = data.daySettings;
-            this.sunsetSettings = data.sunsetSettings;
-            this.nightSettings = data.nightSettings;
-            this.starsSettings = data.starsSettings;
-            this.overcastSettings = data.overcastSettings;
-
-            Debug.Log($"Skybox settings loaded from: {filePath}");
+            SetMaterialTexture(material, "_BaseTex", baseTexture);
+            SetMaterialTexture(material, "_BlendTex", blendTexture);
+            SetMaterialTexture(material, "_OverlayTex", overlayTexture);
+            SetMaterialTexture(material, "_AlphaTex", alphaTexture);
+            SetMaterialTexture(material, "_MainTex", baseTexture);
+            SetMaterialColor(material, "_BaseBlendColor", baseBlendColor);
+            SetMaterialColor(material, "_OverlayBlendColor", overlayBlendColor);
+            SetMaterialColor(material, "_Color", color);
+            SetMaterialFloat(material, "_UseAlphaTex", alphaTexture != null ? 1f : 0f);
+            SetMaterialFloat(material, "_AlphaChannel", 0f);
         }
 
-        [System.Serializable]
-        public class SkyboxSettingsData
+        private Texture2D LoadTexture(string textureName)
         {
-            // Cloud Settings
-            public Vector2 cloudSpeedA;
-            public Vector2 cloudSpeedB;
-            public float cloudScale;
+            if (string.IsNullOrEmpty(textureName))
+                textureName = "transparent";
 
-            // Light Settings
-            public bool updateDirectionalLight;
-            public float minLightIntensity;
-            public float maxLightIntensity;
-            public Color dayLightColor;
-            public Color sunsetLightColor;
-            public Color nightLightColor;
-            public bool updateAmbientLight;
-            public float ambientIntensity;
+            if (textureCache.TryGetValue(textureName, out Texture2D cached))
+                return cached;
 
-            // Transition Settings
-            public float transitionDuration;
-
-            // Day/Night Cycle Settings
-            public float timeOfDay;
-            public float timeSpeed;
-            public bool autoAdvanceTime;
-
-            // Override Settings
-            public float brightnessOverride;
-            public float exposureOverride;
-            public float cloudIntensityOverride;
-            public float starsIntensityOverride;
-
-            // Presets
-            public TODSettings daySettings;
-            public TODSettings sunsetSettings;
-            public TODSettings nightSettings;
-            public TODSettings starsSettings;
-            public TODSettings overcastSettings;
-        }
-
-        [System.Serializable]
-        public struct TODSettings
-        {
-            public string name;
-
-            // Sky colors - Stage A/B for blending
-            public Color skyColorTopA;
-            public Color skyColorTopB;
-            public Color skyColorHorizonA;
-            public Color skyColorHorizonB;
-            public Color skyColorBottomA;
-            public Color skyColorBottomB;
-            public float stageBlend;
-
-            // Clouds
-            public string cloudTexture;
-            public float cloudIntensity;
-            public float cloudBlendAB;
-
-            // Stars
-            public float starsIntensity;
-            public float starsScale;
-
-            // Sun
-            public float sunIntensity;
-            public float sunSize;
-            public float sunGlowIntensity;
-            public Vector3 sunDirection;
-
-            // Moon
-            public float moonIntensity;
-            public float moonSize;
-            public float moonGlowIntensity;
-            public Vector3 moonDirection;
-
-            // Overall
-            public float brightness;
-            public float exposure;
-            public float contrast;
-        }
-
-        public enum TODPreset
-        {
-            Day,
-            Sunset,
-            Night,
-            Stars,
-            Overcast
-        }
-
-        [System.Serializable]
-        public class TimePresetMapping
-        {
-            [Tooltip("Start time in hours (0-24)")]
-            [Range(0, 24)]
-            public float startTime;
-
-            [Tooltip("End time in hours (0-24). Can be less than start time for ranges that wrap around midnight.")]
-            [Range(0, 24)]
-            public float endTime;
-
-            [Tooltip("Which preset to use during this time range")]
-            public TODPreset preset;
-
-            [Tooltip("If true, smoothly transition from previous preset to this preset over the entire time range")]
-            public bool transitionFromPrevious;
-
-            /// <summary>
-            /// Check if a given time falls within this mapping's range
-            /// </summary>
-            public bool ContainsTime(float time)
+            Texture2D texture = Resources.Load<Texture2D>(MapRoot + textureName);
+            if (texture == null)
             {
-                // Handle ranges that wrap around midnight (e.g., 21:00 to 5:00)
-                if (endTime < startTime)
-                {
-                    return time >= startTime || time < endTime;
-                }
-                else
-                {
-                    return time >= startTime && time < endTime;
-                }
+                Debug.LogWarning($"SkyboxManager: Missing Resources/{MapRoot}{textureName}. Using generated fallback.");
+                texture = GetFallbackTexture(textureName);
             }
 
-            /// <summary>
-            /// Get the interpolation factor (0-1) for the current time within this range
-            /// </summary>
-            public float GetInterpolationFactor(float time)
+            textureCache[textureName] = texture;
+            return texture;
+        }
+
+        private Texture2D LoadAlphaTexture(string textureName)
+        {
+            if (string.IsNullOrEmpty(textureName) || textureName.Equals("transparent", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            string alphaTextureName = textureName.EndsWith("_a", StringComparison.OrdinalIgnoreCase)
+                ? textureName
+                : textureName + "_a";
+
+            if (textureCache.TryGetValue(alphaTextureName, out Texture2D cached))
+                return cached;
+
+            Texture2D texture = Resources.Load<Texture2D>(MapRoot + alphaTextureName);
+            if (texture == null)
+                return null;
+
+            textureCache[alphaTextureName] = texture;
+            return texture;
+        }
+
+        private Texture2D GetFallbackTexture(string textureName)
+        {
+            if (fallbackTextures.TryGetValue(textureName, out Texture2D texture))
+                return texture;
+
+            Color color = textureName.Equals("transparent", StringComparison.OrdinalIgnoreCase)
+                ? new Color(1f, 1f, 1f, 0f)
+                : Color.white;
+
+            texture = new Texture2D(2, 2, TextureFormat.RGBA32, false)
             {
-                float duration;
-                float elapsed;
+                name = textureName + "_Fallback",
+                hideFlags = HideFlags.DontSave
+            };
+            texture.SetPixels(new[] { color, color, color, color });
+            texture.Apply();
+            fallbackTextures[textureName] = texture;
+            return texture;
+        }
 
-                if (endTime < startTime)
-                {
-                    // Wraps around midnight
-                    duration = (24f - startTime) + endTime;
-                    if (time >= startTime)
-                    {
-                        elapsed = time - startTime;
-                    }
-                    else
-                    {
-                        elapsed = (24f - startTime) + time;
-                    }
-                }
-                else
-                {
-                    duration = endTime - startTime;
-                    elapsed = time - startTime;
-                }
+        private void AssignMaterialToRenderers(Transform root, Material material)
+        {
+            if (root == null || material == null)
+                return;
 
-                return Mathf.Clamp01(elapsed / duration);
+            Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+            foreach (Renderer renderer in renderers)
+            {
+                Material[] materials = new Material[renderer.sharedMaterials.Length];
+                for (int i = 0; i < materials.Length; i++)
+                    materials[i] = material;
+
+                if (materials.Length == 0)
+                    materials = new[] { material };
+
+                renderer.sharedMaterials = materials;
             }
+        }
+
+        private static void ConfigureRenderers(Transform root)
+        {
+            Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+            foreach (Renderer renderer in renderers)
+            {
+                renderer.shadowCastingMode = ShadowCastingMode.Off;
+                renderer.receiveShadows = false;
+                renderer.lightProbeUsage = LightProbeUsage.Off;
+                renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
+                renderer.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
+                renderer.allowOcclusionWhenDynamic = false;
+                renderer.forceRenderingOff = false;
+            }
+        }
+
+        private static void SetMaterialTexture(Material material, string propertyName, Texture texture)
+        {
+            if (material == null || texture == null)
+                return;
+
+            if (material.HasProperty(propertyName))
+                material.SetTexture(propertyName, texture);
+
+            if (propertyName == "_MainTex")
+                material.mainTexture = texture;
+        }
+
+        private static void SetMaterialColor(Material material, string propertyName, Color color)
+        {
+            if (material != null && material.HasProperty(propertyName))
+                material.SetColor(propertyName, color);
+        }
+
+        private static void SetMaterialVector(Material material, string propertyName, Vector4 vector)
+        {
+            if (material != null && material.HasProperty(propertyName))
+                material.SetVector(propertyName, vector);
+        }
+
+        private static void SetMaterialFloat(Material material, string propertyName, float value)
+        {
+            if (material != null && material.HasProperty(propertyName))
+                material.SetFloat(propertyName, value);
+        }
+
+        private void FaceBillboardsToCamera()
+        {
+            Camera camera = Camera.main;
+            if (camera == null)
+                return;
+
+            FaceTransformToCamera(sunModelRoot, camera);
+            FaceTransformToCamera(MoonModelRoot != null ? MoonModelRoot.transform : null, camera);
+            FaceTransformToCamera(moonGlowRoot, camera);
+            FaceTransformToCamera(moonOverlayRoot, camera);
+        }
+
+        private void EnsureCameraCanRenderSky()
+        {
+            if (!expandMainCameraClipForSky)
+                return;
+
+            Camera mainCamera = Camera.main;
+            if (mainCamera != null)
+                ExpandCameraClip(mainCamera);
+
+            Camera[] cameras = Resources.FindObjectsOfTypeAll<Camera>();
+            for (int i = 0; i < cameras.Length; i++)
+            {
+                Camera camera = cameras[i];
+                if (camera != null && camera.gameObject.scene.IsValid())
+                    ExpandCameraClip(camera);
+            }
+        }
+
+        private void ExpandCameraClip(Camera camera)
+        {
+            if (camera.farClipPlane < minimumSkyFarClipPlane)
+                camera.farClipPlane = minimumSkyFarClipPlane;
+        }
+
+        private static void FaceTransformToCamera(Transform target, Camera camera)
+        {
+            if (target == null)
+                return;
+
+            Vector3 direction = target.position - camera.transform.position;
+            if (direction.sqrMagnitude > 0.001f)
+                target.rotation = Quaternion.LookRotation(direction.normalized, camera.transform.up);
+        }
+
+        private static void DestroyUnityObject(UnityEngine.Object obj)
+        {
+            if (obj == null)
+                return;
+
+            if (Application.isPlaying)
+                Destroy(obj);
+            else
+                DestroyImmediate(obj);
         }
     }
 }

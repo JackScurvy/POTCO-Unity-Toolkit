@@ -13,6 +13,7 @@ Shader "POTCO/ShoreFoam"
     {
         Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" }
         LOD 100
+        Cull Off
         ZWrite Off
         Blend SrcAlpha OneMinusSrcAlpha
 

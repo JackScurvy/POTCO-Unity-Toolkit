@@ -1249,6 +1249,8 @@ namespace WorldDataImporter.Algorithms
             else
                 instance.transform.localScale = Vector3.one;
 
+            IslandReferenceVisualUtility.AttachReferenceIslandVisuals(visual.modelPath, parentGO, useEgg);
+
             if (updateObjectListInfo && settings != null && settings.importObjectListData)
             {
                 var typeInfo = ownerGO.GetComponent<ObjectListInfo>();
