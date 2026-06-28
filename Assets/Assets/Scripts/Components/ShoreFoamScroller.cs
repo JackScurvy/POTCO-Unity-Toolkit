@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace POTCO
 {
@@ -11,6 +12,9 @@ namespace POTCO
 
     public class ShoreFoamScroller : MonoBehaviour
     {
+        public const int RenderQueueOffset = 60;
+        public const float DepthOffset = -1f;
+
         public FoamMotionType motionType = FoamMotionType.TideV;
         
         [Header("Wave Settings")]
@@ -25,11 +29,35 @@ namespace POTCO
         private MaterialPropertyBlock propBlock;
         private static readonly int FoamUProp = Shader.PropertyToID("_FoamU");
         private static readonly int FoamVProp = Shader.PropertyToID("_FoamV");
+        private static readonly int ZTestProp = Shader.PropertyToID("_ZTest");
+        private static readonly int OffsetFactorProp = Shader.PropertyToID("_OffsetFactor");
+        private static readonly int OffsetUnitsProp = Shader.PropertyToID("_OffsetUnits");
 
         void Awake() 
         { 
             rend = GetComponent<Renderer>();
             propBlock = new MaterialPropertyBlock();
+            ApplyOverlayRenderState(rend != null ? rend.sharedMaterial : null);
+        }
+
+        void OnValidate()
+        {
+            Renderer renderer = GetComponent<Renderer>();
+            ApplyOverlayRenderState(renderer != null ? renderer.sharedMaterial : null);
+        }
+
+        public static void ApplyOverlayRenderState(Material material)
+        {
+            if (material == null)
+                return;
+
+            material.renderQueue = (int)RenderQueue.Transparent + RenderQueueOffset;
+            if (material.HasProperty(ZTestProp))
+                material.SetFloat(ZTestProp, (float)CompareFunction.LessEqual);
+            if (material.HasProperty(OffsetFactorProp))
+                material.SetFloat(OffsetFactorProp, DepthOffset);
+            if (material.HasProperty(OffsetUnitsProp))
+                material.SetFloat(OffsetUnitsProp, DepthOffset);
         }
 
         void Update()

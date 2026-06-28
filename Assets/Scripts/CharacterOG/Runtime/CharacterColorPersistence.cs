@@ -27,6 +27,8 @@ namespace CharacterOG.Runtime
 
         // Property blocks for each renderer
         private Dictionary<Renderer, MaterialPropertyBlock> propertyBlocks = new Dictionary<Renderer, MaterialPropertyBlock>();
+        private int pendingRefreshFrames = 0;
+        private const int RefreshFramesAfterLifecycleEvent = 4;
 
         // Shader properties
         private static readonly int BaseColorProperty = Shader.PropertyToID("_BaseColor");
@@ -35,22 +37,34 @@ namespace CharacterOG.Runtime
 
         private void Awake()
         {
+            ScheduleDeferredRefresh();
             ForceRefresh();
         }
 
         private void OnEnable()
         {
+            ScheduleDeferredRefresh();
             ForceRefresh();
         }
 
         private void Start()
         {
             // Double-check on start to ensure colors are applied
+            ScheduleDeferredRefresh();
             ForceRefresh();
         }
 
-        // Removed Update() - colors should persist once applied via MaterialPropertyBlock
-        // If colors are lost, the issue is elsewhere (material instantiation, shader changes, etc.)
+        private void LateUpdate()
+        {
+            if (!hasStoredColors || pendingRefreshFrames <= 0)
+                return;
+
+            ReapplyColors();
+            pendingRefreshFrames--;
+        }
+
+        // Play mode startup can reset MaterialPropertyBlocks after Awake/Start.
+        // A short LateUpdate refresh window restores serialized colors without a permanent per-frame cost.
 
         private void OnDestroy()
         {
@@ -80,6 +94,7 @@ namespace CharacterOG.Runtime
 #endif
 
             // Apply immediately
+            ScheduleDeferredRefresh();
             ReapplyColors();
         }
 
@@ -94,6 +109,11 @@ namespace CharacterOG.Runtime
             }
         }
 
+        private void ScheduleDeferredRefresh()
+        {
+            pendingRefreshFrames = Mathf.Max(pendingRefreshFrames, RefreshFramesAfterLifecycleEvent);
+        }
+
         /// <summary>
         /// Reapply all stored colors to character renderers
         /// </summary>
@@ -102,7 +122,7 @@ namespace CharacterOG.Runtime
             if (!hasStoredColors)
                 return;
 
-            Renderer[] renderers = GetComponentsInChildren<Renderer>();
+            Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
 
             foreach (Renderer renderer in renderers)
             {
@@ -110,52 +130,54 @@ namespace CharacterOG.Runtime
                     continue;
 
                 string name = renderer.gameObject.name.ToLower();
-
-                // Determine which color to apply based on mesh name
-                Color? colorToApply = null;
-
-                // Skin color - body parts and head/face
-                if (name.Contains("body_") || name.Contains("head") || name.Contains("face") || name.Contains("_arm") || name.Contains("_leg") || name.Contains("_torso"))
-                {
-                    colorToApply = skinColor;
-                }
-                // Hair color - hair, beard, mustache, eyebrows
-                else if (name.Contains("hair_") || name.Contains("beard_") || name.Contains("mustache_") || name.Contains("eyebrow"))
-                {
-                    colorToApply = hairColor;
-                }
-                // Top clothing color - shirts, vests, coats, hats
-                else if (name.Contains("clothing_layer") || name.Contains("shirt") || name.Contains("vest") || name.Contains("coat") || name.Contains("hat"))
-                {
-                    // Check if it's top or bottom clothing
-                    if (name.Contains("shoe") || name.Contains("boot"))
-                    {
-                        colorToApply = shoeColor;
-                    }
-                    else if (name.Contains("pant"))
-                    {
-                        colorToApply = botColor;
-                    }
-                    else
-                    {
-                        colorToApply = topColor;
-                    }
-                }
-                // Bottom clothing color - pants, shoes
-                else if (name.Contains("pant") || name.Contains("_abs"))
-                {
-                    colorToApply = botColor;
-                }
-                else if (name.Contains("shoe") || name.Contains("boot"))
-                {
-                    colorToApply = shoeColor;
-                }
+                Color? colorToApply = ResolveColorForRendererName(name);
 
                 if (colorToApply.HasValue)
                 {
                     ApplyColorToRenderer(renderer, colorToApply.Value);
                 }
             }
+        }
+
+        private Color? ResolveColorForRendererName(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return null;
+
+            if (name.StartsWith("body_") ||
+                name.Contains("head") ||
+                name.Contains("face") ||
+                name.Contains("_arm") ||
+                name.Contains("_leg") ||
+                name.Contains("_torso"))
+            {
+                return skinColor;
+            }
+
+            if (name.StartsWith("hair_") ||
+                name.StartsWith("beard_") ||
+                name.StartsWith("mustache_") ||
+                name.Contains("eyebrow"))
+            {
+                return hairColor;
+            }
+
+            if (name.Contains("shoe") || name.Contains("boot"))
+                return shoeColor;
+
+            if (name.Contains("pant") || name.Contains("skirt") || name.Contains("_abs"))
+                return botColor;
+
+            if (name.Contains("shirt") ||
+                name.Contains("vest") ||
+                name.Contains("coat") ||
+                name.Contains("hat") ||
+                name.Contains("clothing_layer"))
+            {
+                return topColor;
+            }
+
+            return null;
         }
 
         /// <summary>

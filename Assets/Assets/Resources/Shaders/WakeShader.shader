@@ -7,12 +7,17 @@ Shader "POTCO/WakeShader"
         _AlphaTex ("Alpha Mask (Optional)", 2D) = "white" {}
         _WakeU ("Wake U Offset", Float) = 0
         _Alpha ("Alpha Multiplier", Range(0, 1)) = 1
+        [Enum(UnityEngine.Rendering.CompareFunction)] _ZTest ("ZTest", Float) = 4
+        _OffsetFactor ("Depth Offset Factor", Float) = -1
+        _OffsetUnits ("Depth Offset Units", Float) = -1
     }
     SubShader
     {
-        Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" }
+        Tags { "Queue"="Transparent+60" "IgnoreProjector"="True" "RenderType"="Transparent" }
         LOD 100
         ZWrite Off
+        ZTest [_ZTest]
+        Offset [_OffsetFactor], [_OffsetUnits]
         Blend SrcAlpha OneMinusSrcAlpha
 
         Pass

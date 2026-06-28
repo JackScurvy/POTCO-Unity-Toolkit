@@ -16,6 +16,11 @@ namespace POTCO
 
     public static class ShipWakeUtility
     {
+        private const int WakeRenderQueueOffset = 60;
+        private const float WakeDepthOffset = -1f;
+        private static readonly int ZTestPropertyId = Shader.PropertyToID("_ZTest");
+        private static readonly int OffsetFactorPropertyId = Shader.PropertyToID("_OffsetFactor");
+        private static readonly int OffsetUnitsPropertyId = Shader.PropertyToID("_OffsetUnits");
         private static Material cachedWakeMaterial;
 
         public static ShipWake EnsureWake(GameObject shipRoot)
@@ -217,6 +222,14 @@ namespace POTCO
             {
                 cachedWakeMaterial.SetTexture("_AlphaTex", wakeAlphaTexture);
             }
+
+            cachedWakeMaterial.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent + WakeRenderQueueOffset;
+            if (cachedWakeMaterial.HasProperty(ZTestPropertyId))
+                cachedWakeMaterial.SetFloat(ZTestPropertyId, (float)UnityEngine.Rendering.CompareFunction.LessEqual);
+            if (cachedWakeMaterial.HasProperty(OffsetFactorPropertyId))
+                cachedWakeMaterial.SetFloat(OffsetFactorPropertyId, WakeDepthOffset);
+            if (cachedWakeMaterial.HasProperty(OffsetUnitsPropertyId))
+                cachedWakeMaterial.SetFloat(OffsetUnitsPropertyId, WakeDepthOffset);
 
             return cachedWakeMaterial;
         }

@@ -67,7 +67,7 @@ Shader "POTCO/Ocean Water"
             Tags { "LightMode"="UniversalForward" }
 
             Blend SrcAlpha OneMinusSrcAlpha
-            ZWrite On
+            ZWrite Off
             Cull Back
 
             HLSLPROGRAM
@@ -306,7 +306,7 @@ Shader "POTCO/Ocean Water"
         Pass
         {
             Blend SrcAlpha OneMinusSrcAlpha
-            ZWrite On
+            ZWrite Off
 
             CGPROGRAM
             #pragma vertex vert

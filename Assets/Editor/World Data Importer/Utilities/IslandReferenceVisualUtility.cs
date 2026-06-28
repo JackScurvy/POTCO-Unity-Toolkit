@@ -176,6 +176,8 @@ namespace WorldDataImporter.Utilities
             material.SetFloat("_FoamV", 0f);
             material.SetFloat("_Alpha", 1f);
             material.SetColor("_Color", Color.white);
+            ShoreFoamScroller.ApplyOverlayRenderState(material);
+
             renderer.sharedMaterial = material;
         }
 

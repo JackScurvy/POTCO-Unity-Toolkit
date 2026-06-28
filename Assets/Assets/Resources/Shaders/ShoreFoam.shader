@@ -8,13 +8,18 @@ Shader "POTCO/ShoreFoam"
         _FoamV ("Foam V Offset", Float) = 0
         _Alpha ("Alpha Multiplier", Range(0, 1)) = 1
         _Color ("Tint Color", Color) = (1,1,1,1)
+        [Enum(UnityEngine.Rendering.CompareFunction)] _ZTest ("ZTest", Float) = 4
+        _OffsetFactor ("Depth Offset Factor", Float) = -1
+        _OffsetUnits ("Depth Offset Units", Float) = -1
     }
     SubShader
     {
-        Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" }
+        Tags { "Queue"="Transparent+60" "IgnoreProjector"="True" "RenderType"="Transparent" }
         LOD 100
         Cull Off
         ZWrite Off
+        ZTest [_ZTest]
+        Offset [_OffsetFactor], [_OffsetUnits]
         Blend SrcAlpha OneMinusSrcAlpha
 
         Pass
