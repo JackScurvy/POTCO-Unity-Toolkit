@@ -17,7 +17,7 @@ namespace POTCO
     public static class ShipWakeUtility
     {
         private const int WakeRenderQueueOffset = 60;
-        private const float WakeDepthOffset = -1f;
+        private const float WakeDepthOffset = 0f;
         private static readonly int ZTestPropertyId = Shader.PropertyToID("_ZTest");
         private static readonly int OffsetFactorPropertyId = Shader.PropertyToID("_OffsetFactor");
         private static readonly int OffsetUnitsPropertyId = Shader.PropertyToID("_OffsetUnits");

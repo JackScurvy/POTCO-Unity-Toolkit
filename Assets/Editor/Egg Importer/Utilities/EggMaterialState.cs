@@ -235,13 +235,26 @@ public static class EggMaterialRenderState
         EggAlphaMode requestedMode = renderState != null ? renderState.AlphaMode : EggAlphaMode.Unspecified;
         bool binaryAlphaOnly = true;
         bool hasTextureAlpha = false;
+        bool hasExplicitlyOpaqueTexture = false;
+        bool hasUnknownAlphaSource = false;
+        bool hasExplicitTransparencyOrdering = renderState != null &&
+            ((renderState.DepthWrite.HasValue && !renderState.DepthWrite.Value) ||
+             (renderState.DrawOrder.HasValue && renderState.DrawOrder.Value != 0) ||
+             BinRequiresTransparencyOrdering(renderState.Bin));
+        bool hasExplicitOpaqueBin = renderState != null && BinIsExplicitlyOpaque(renderState.Bin);
 
         if (textureRefs != null && textureData != null)
         {
             for (int i = 0; i < textureRefs.Count; i++)
             {
                 TextureWrapData texture;
-                if (!textureData.TryGetValue(textureRefs[i], out texture) || !TextureAffectsPolygonAlpha(texture.envType))
+                if (!textureData.TryGetValue(textureRefs[i], out texture))
+                {
+                    hasUnknownAlphaSource = true;
+                    continue;
+                }
+
+                if (!TextureAffectsPolygonAlpha(texture.envType))
                 {
                     continue;
                 }
@@ -259,7 +272,31 @@ public static class EggMaterialRenderState
                         binaryAlphaOnly = false;
                     }
                 }
+                else if (FormatIsExplicitlyOpaque(texture.format))
+                {
+                    hasExplicitlyOpaqueTexture = true;
+                }
+                else
+                {
+                    hasUnknownAlphaSource = true;
+                }
             }
+        }
+
+        // Some exported EGG assets request ordinary alpha blending even though their
+        // alpha-affecting textures are explicitly RGB-only. Treat those polygons as
+        // opaque when their vertices are opaque, or when the asset explicitly places
+        // them in an opaque/ground bin. The latter prevents isolated bad vertex alpha
+        // values from punching transparent triangles into solid decks and terrain.
+        // Unknown formats and specialized blend modes remain untouched.
+        if (requestedMode == EggAlphaMode.Blend &&
+            hasExplicitlyOpaqueTexture &&
+            !hasUnknownAlphaSource &&
+            !hasTextureAlpha &&
+            (!hasVertexAlpha || hasExplicitOpaqueBin) &&
+            !hasExplicitTransparencyOrdering)
+        {
+            requestedMode = EggAlphaMode.Off;
         }
 
         if (hasVertexAlpha)
@@ -399,6 +436,23 @@ public static class EggMaterialRenderState
     {
         if (string.IsNullOrEmpty(format)) return false;
 
+        if (FormatIsExplicitlyOpaque(format)) return false;
+
+        string normalized = format.Trim().ToLowerInvariant().Replace("-", "_");
+        return normalized.Contains("alpha") ||
+               normalized == "a" ||
+               normalized == "rgba" ||
+               normalized == "rgba12" ||
+               normalized == "rgba8" ||
+               normalized == "rgba4" ||
+               normalized == "rgba5" ||
+               normalized == "rgbm";
+    }
+
+    public static bool FormatIsExplicitlyOpaque(string format)
+    {
+        if (string.IsNullOrEmpty(format)) return false;
+
         string normalized = format.Trim().ToLowerInvariant().Replace("-", "_");
         switch (normalized)
         {
@@ -413,17 +467,26 @@ public static class EggMaterialRenderState
             case "rgb5":
             case "rgb332":
             case "srgb":
-                return false;
+                return true;
             default:
-                return normalized.Contains("alpha") ||
-                       normalized == "a" ||
-                       normalized == "rgba" ||
-                       normalized == "rgba12" ||
-                       normalized == "rgba8" ||
-                       normalized == "rgba4" ||
-                       normalized == "rgba5" ||
-                       normalized == "rgbm";
+                return false;
         }
+    }
+
+    private static bool BinRequiresTransparencyOrdering(string bin)
+    {
+        if (string.IsNullOrWhiteSpace(bin)) return false;
+
+        string normalized = bin.Trim().ToLowerInvariant().Replace("-", "_");
+        return normalized != "ground" && normalized != "opaque";
+    }
+
+    private static bool BinIsExplicitlyOpaque(string bin)
+    {
+        if (string.IsNullOrWhiteSpace(bin)) return false;
+
+        string normalized = bin.Trim().ToLowerInvariant().Replace("-", "_");
+        return normalized == "ground" || normalized == "opaque";
     }
 
     public static bool FormatHasBinaryAlpha(string format)

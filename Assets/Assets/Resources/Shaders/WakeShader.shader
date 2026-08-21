@@ -8,8 +8,8 @@ Shader "POTCO/WakeShader"
         _WakeU ("Wake U Offset", Float) = 0
         _Alpha ("Alpha Multiplier", Range(0, 1)) = 1
         [Enum(UnityEngine.Rendering.CompareFunction)] _ZTest ("ZTest", Float) = 4
-        _OffsetFactor ("Depth Offset Factor", Float) = -1
-        _OffsetUnits ("Depth Offset Units", Float) = -1
+        _OffsetFactor ("Depth Offset Factor", Float) = 0
+        _OffsetUnits ("Depth Offset Units", Float) = 0
     }
     SubShader
     {

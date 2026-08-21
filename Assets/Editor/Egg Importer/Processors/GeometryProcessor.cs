@@ -207,8 +207,10 @@ public class GeometryProcessor
                 meshVertices[i] -= pivotOffset;
             }
             
-            // Adjust the GameObject position to compensate
-            go.transform.localPosition += pivotOffset;
+            // Adjust the GameObject position to compensate. EGG vertices are stored in
+            // model space, so child geometry must remain fixed in world/model space when
+            // a mesh-bearing parent receives its own pivot offset.
+            MovePivotPreservingChildWorldPositions(go.transform, pivotOffset);
 
             DebugLogger.LogEggImporter($"Pivot adjustment ({_cachedSettings.pivotMode}): {pivotOffset}, Bounds: min={min}, max={max}");
         }
@@ -355,6 +357,34 @@ public class GeometryProcessor
         }
 
         ctx.AddObjectToAsset(mesh.name, mesh);
+    }
+
+    internal static void MovePivotPreservingChildWorldPositions(Transform meshTransform, Vector3 pivotOffset)
+    {
+        if (meshTransform == null)
+        {
+            return;
+        }
+
+        int childCount = meshTransform.childCount;
+        var children = new Transform[childCount];
+        var childWorldPositions = new Vector3[childCount];
+        for (int i = 0; i < childCount; i++)
+        {
+            Transform child = meshTransform.GetChild(i);
+            children[i] = child;
+            childWorldPositions[i] = child.position;
+        }
+
+        meshTransform.localPosition += pivotOffset;
+
+        // Only the parent's translation changed, so restoring direct-child positions
+        // also preserves every descendant's world transform without disturbing rotation,
+        // scale, sibling order, metadata, or LOD hierarchy.
+        for (int i = 0; i < childCount; i++)
+        {
+            children[i].position = childWorldPositions[i];
+        }
     }
 
     public void ConfigureLODGroups(GameObject rootGO)
@@ -1082,13 +1112,8 @@ public class GeometryProcessor
             // else keep "Default-Material"
         }
 
-        if (polygonTextureRef != "Collision-Material")
-        {
-            EggMaterialState materialState = EggMaterialRenderState.Resolve(polygonRenderState, textureRefs, _textureRenderData, false);
-            polygonTextureRef = EggMaterialRenderState.AppendState(polygonTextureRef, materialState);
-        }
-
-        if (!subMeshes.ContainsKey(polygonTextureRef)) { subMeshes[polygonTextureRef] = new List<int>(); materialNames.Add(polygonTextureRef); }
+        var polygonTriangles = new List<int>(6);
+        bool hasVertexAlpha = false;
         for (int j = i + 1; j < blockEnd; j++)
         {
             string innerLine = lines[j].Trim();
@@ -1199,13 +1224,15 @@ public class GeometryProcessor
                             poolMapping.TryGetValue(localV1, out int globalV1) &&
                             poolMapping.TryGetValue(localV2, out int globalV2))
                         {
-                            subMeshes[polygonTextureRef].Add(globalV0); subMeshes[polygonTextureRef].Add(globalV2); subMeshes[polygonTextureRef].Add(globalV1);
+                            polygonTriangles.Add(globalV0); polygonTriangles.Add(globalV2); polygonTriangles.Add(globalV1);
+                            hasVertexAlpha |= VertexHasAlpha(globalV0) || VertexHasAlpha(globalV1) || VertexHasAlpha(globalV2);
 
                             if (count > 3) // Quad
                             {
                                 if (poolMapping.TryGetValue(localV3, out int globalV3))
                                 {
-                                    subMeshes[polygonTextureRef].Add(globalV0); subMeshes[polygonTextureRef].Add(globalV3); subMeshes[polygonTextureRef].Add(globalV2);
+                                    polygonTriangles.Add(globalV0); polygonTriangles.Add(globalV3); polygonTriangles.Add(globalV2);
+                                    hasVertexAlpha |= VertexHasAlpha(globalV3);
                                 }
                                 else
                                 {
@@ -1225,7 +1252,23 @@ public class GeometryProcessor
                 }
             }
         }
+
+        if (polygonTextureRef != "Collision-Material")
+        {
+            EggMaterialState materialState = EggMaterialRenderState.Resolve(polygonRenderState, textureRefs, _textureRenderData, hasVertexAlpha);
+            polygonTextureRef = EggMaterialRenderState.AppendState(polygonTextureRef, materialState);
+        }
+
+        if (!subMeshes.ContainsKey(polygonTextureRef)) { subMeshes[polygonTextureRef] = new List<int>(); materialNames.Add(polygonTextureRef); }
+        subMeshes[polygonTextureRef].AddRange(polygonTriangles);
         i = blockEnd;
+    }
+
+    private bool VertexHasAlpha(int globalVertexIndex)
+    {
+        return globalVertexIndex >= 0 &&
+               globalVertexIndex < _cachedMasterColors.Length &&
+               _cachedMasterColors[globalVertexIndex].a < 0.9999f;
     }
 
     private void ParsePointPrimitive(string[] lines, ref int i, string currentPath, Dictionary<string, Transform> hierarchyMap)
