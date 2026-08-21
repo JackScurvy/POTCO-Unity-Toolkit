@@ -48,6 +48,14 @@ namespace CharacterOG.Runtime.Utils
             {
                 if (r != null)
                 {
+                    // Layer compatibility rules can disable individual renderers while their
+                    // GameObjects stay active. Restore that renderer state whenever its exact
+                    // group is shown again so removing an outer layer reveals it correctly.
+                    if (on)
+                    {
+                        r.enabled = true;
+                    }
+
                     // OPTIMIZATION: Use SetActive instead of enabled to remove from Transform hierarchy update loop
                     // This saves massive performance when 100s of items are hidden
                     r.gameObject.SetActive(on);
